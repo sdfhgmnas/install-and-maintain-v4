@@ -932,3 +932,37 @@ async function deleteAccountsTransaction(id) {
   const { error } = await getDb().from("accounts_transactions").delete().eq("id", id);
   if (error) throw error;
 }
+
+// ============================================================
+// USER PERMISSIONS (v3.1)
+// ============================================================
+
+async function fetchUserPermissions() {
+  const { data, error } = await getDb()
+    .from("user_permissions")
+    .select("*");
+  if (error) throw error;
+  return (data || []).map((row) => ({
+    username: row.username,
+    displayName: row.display_name,
+    isAdmin: !!row.is_admin,
+    allowedPages: row.allowed_pages || [],
+    updatedAt: row.updated_at,
+    updatedBy: row.updated_by,
+  }));
+}
+
+async function upsertUserPermission(p) {
+  const row = {
+    username: p.username,
+    display_name: p.displayName || null,
+    is_admin: !!p.isAdmin,
+    allowed_pages: p.allowedPages || [],
+    updated_at: new Date().toISOString(),
+    updated_by: p.updatedBy || null,
+  };
+  const { error } = await getDb()
+    .from("user_permissions")
+    .upsert(row, { onConflict: "username" });
+  if (error) throw error;
+}
