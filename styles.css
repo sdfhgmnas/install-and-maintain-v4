@@ -6792,3 +6792,216 @@ button.clickable-card:focus-visible {
   text-align: center;
   border: 1px solid rgba(245, 158, 11, 0.3);
 }
+
+/* ============================================================
+   v3.1 — Bulk stock scan + User Access page
+   ============================================================ */
+
+/* ===== User Access page ===== */
+.user-access-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 1rem 1.1rem;
+  margin-bottom: 0.85rem;
+}
+
+.user-access-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.7rem;
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.user-access-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0 0 0.15rem;
+}
+
+.user-access-username {
+  font-size: 0.75rem;
+  color: #64748b;
+  font-family: var(--font-mono);
+  background: white;
+  padding: 0.12rem 0.4rem;
+  border-radius: 5px;
+  border: 1px solid #e2e8f0;
+}
+
+.user-access-pages {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem 0.8rem;
+}
+
+.user-access-page-check {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.83rem;
+  color: #334155;
+  cursor: pointer;
+  user-select: none;
+  padding: 0.3rem 0.4rem;
+  border-radius: 6px;
+  transition: background 0.12s;
+}
+
+.user-access-page-check:hover {
+  background: rgba(8, 145, 178, 0.06);
+}
+
+.user-access-page-check input {
+  width: 18px;
+  height: 18px;
+  accent-color: #0891b2;
+  cursor: pointer;
+}
+
+@media (max-width: 640px) {
+  .user-access-pages {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===== Bulk scan modal ===== */
+.bulk-scan-stats {
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.85rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-left: 4px solid #10b981;
+}
+
+.bulk-stat-label {
+  font-size: 0.78rem;
+  color: #047857;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.bulk-stat-num {
+  font-family: var(--font-mono);
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: #047857;
+  transition: transform 0.2s;
+}
+
+.bulk-scan-viewfinder {
+  max-height: 240px;
+  aspect-ratio: auto !important;
+  height: 240px;
+}
+
+.bulk-scanned-list {
+  margin-top: 0.85rem;
+  background: #f8fafc;
+  border-radius: 10px;
+  padding: 0.7rem 0.85rem;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.bulk-scanned-list h4 {
+  font-size: 0.78rem;
+  color: #475569;
+  margin: 0 0 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.bulk-list-count {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.bulk-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.bulk-list-empty {
+  color: #94a3b8;
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 0.7rem 0;
+}
+
+.bulk-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: white;
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  animation: bulk-slide-in 0.2s ease-out;
+}
+
+@keyframes bulk-slide-in {
+  from { opacity: 0; transform: translateX(10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.bulk-list-num {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: #64748b;
+  font-weight: 700;
+  min-width: 22px;
+}
+
+.bulk-list-imei {
+  flex: 1;
+  font-size: 0.82rem;
+  color: #0f172a;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.bulk-list-remove {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(239, 68, 68, 0.1);
+  color: #b91c1c;
+  border: none;
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  transition: background 0.15s;
+}
+
+.bulk-list-remove:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.btn-block {
+  width: 100%;
+}
+
+.modal-wide {
+  max-width: 540px !important;
+  width: 95vw !important;
+}
