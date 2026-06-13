@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "2.9.2";
+const APP_VERSION = "3.0.0";
 
 const USERS = {
   akash: { password: "akash", role: "akash" },
@@ -35,6 +35,8 @@ let stockTransactions = [];
 let stockCategories = [];
 let suppliers = [];
 let deletionLog = [];
+let accountsProjects = [];
+let accountsTransactions = [];
 let simsTableReady = true;
 let stockItemsTableReady = true;
 let stockTxTableReady = true;
@@ -998,6 +1000,19 @@ async function refreshAllData() {
       } else {
         throw err;
       }
+    }
+    // Accounts module — soft-fail if migration hasn't been run yet
+    try {
+      accountsProjects = await withTimeout(fetchAccountsProjects(), 20000, "Fetch accounts projects");
+    } catch (err) {
+      console.warn("accounts_projects table missing or unreadable", err?.message || err);
+      accountsProjects = [];
+    }
+    try {
+      accountsTransactions = await withTimeout(fetchAccountsTransactions(), 20000, "Fetch accounts transactions");
+    } catch (err) {
+      console.warn("accounts_transactions table missing or unreadable", err?.message || err);
+      accountsTransactions = [];
     }
     lastSyncedAt = new Date();
   } finally {
@@ -4214,6 +4229,7 @@ const ADMIN_NAV = [
   { key: "pending",       view: "pending",       icon: "◷", label: "Progress",  labelLong: "Repair Progress" },
   { key: "sim-db",        view: "sim-db",        icon: "≣", label: "SIMs",      labelLong: "SIM Database" },
   { key: "stock",         view: "stock",         icon: "▦", label: "Stock",     labelLong: "Stock" },
+  { key: "accounts",      view: "accounts",      icon: "₹", label: "Accounts",  labelLong: "Accounts" },
 ];
 
 function renderAdminNav(activeKey) {
@@ -7139,6 +7155,9 @@ function render() {
     case "stock":
       renderStockPage();
       break;
+    case "accounts":
+      renderAccountsPage();
+      break;
     case "deletions":
       renderDeletionsPage();
       break;
@@ -7152,6 +7171,368 @@ function render() {
     default:
       renderLogin();
   }
+}
+
+// ============================================================
+// ACCOUNTS MODULE (v3.0)
+// Balance tracking with project-wise credit / expense / salary
+// ============================================================
+
+function formatINR(n) {
+  const num = Number(n) || 0;
+  return "₹" + num.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function calculateAccountsBalance(transactions) {
+  let bal = 0;
+  for (const tx of transactions) {
+    if (tx.type === "opening" || tx.type === "credit") bal += tx.amount;
+    else if (tx.type === "expense" || tx.type === "salary") bal -= tx.amount;
+  }
+  return bal;
+}
+
+function accountsProjectSummary(transactions) {
+  const summary = {};
+  for (const tx of transactions) {
+    const proj = tx.projectName || "Uncategorized";
+    if (!summary[proj]) summary[proj] = { credit: 0, expense: 0, salary: 0, net: 0 };
+    if (tx.type === "credit") summary[proj].credit += tx.amount;
+    else if (tx.type === "expense") summary[proj].expense += tx.amount;
+    else if (tx.type === "salary") summary[proj].salary += tx.amount;
+  }
+  for (const proj in summary) {
+    summary[proj].net = summary[proj].credit - summary[proj].expense - summary[proj].salary;
+  }
+  return summary;
+}
+
+function renderAccountsPage() {
+  const balance = calculateAccountsBalance(accountsTransactions);
+  const summary = accountsProjectSummary(accountsTransactions);
+  const projectKeys = Object.keys(summary).sort((a, b) => Math.abs(summary[b].net) - Math.abs(summary[a].net));
+  const recent = accountsTransactions.slice(0, 30);
+
+  const totalCredit = accountsTransactions.filter((t) => t.type === "credit" || t.type === "opening").reduce((s, t) => s + t.amount, 0);
+  const totalExpense = accountsTransactions.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+  const totalSalary = accountsTransactions.filter((t) => t.type === "salary").reduce((s, t) => s + t.amount, 0);
+
+  app.innerHTML = `
+    ${renderHeader("Accounts", "Money in, money out, project-wise")}
+    <main class="main">
+      ${renderAdminNav("accounts")}
+
+      <!-- Balance hero -->
+      <section class="card acc-hero ${balance < 0 ? "acc-hero-neg" : ""}">
+        <div class="acc-hero-label">Current Balance</div>
+        <div class="acc-hero-amount">${escapeHtml(formatINR(balance))}</div>
+        <div class="acc-hero-stats">
+          <div class="acc-hero-stat">
+            <span class="acc-hero-stat-dot" style="background:#10b981;"></span>
+            <span class="acc-hero-stat-label">Credits</span>
+            <span class="acc-hero-stat-value">${escapeHtml(formatINR(totalCredit))}</span>
+          </div>
+          <div class="acc-hero-stat">
+            <span class="acc-hero-stat-dot" style="background:#f97316;"></span>
+            <span class="acc-hero-stat-label">Expenses</span>
+            <span class="acc-hero-stat-value">${escapeHtml(formatINR(totalExpense))}</span>
+          </div>
+          <div class="acc-hero-stat">
+            <span class="acc-hero-stat-dot" style="background:#8b5cf6;"></span>
+            <span class="acc-hero-stat-label">Salaries</span>
+            <span class="acc-hero-stat-value">${escapeHtml(formatINR(totalSalary))}</span>
+          </div>
+        </div>
+        <div class="acc-actions">
+          <button type="button" class="btn btn-primary" id="addCreditBtn">＋ Add Credit</button>
+          <button type="button" class="btn btn-outline" id="addExpenseBtn">－ Add Expense</button>
+          <button type="button" class="btn btn-outline" id="addSalaryBtn">👤 Add Salary</button>
+          ${accountsTransactions.length === 0 ? `<button type="button" class="btn btn-secondary btn-sm" id="setOpeningBtn">Set Opening Balance</button>` : ""}
+        </div>
+      </section>
+
+      <!-- Project-wise summary -->
+      <section class="card">
+        <div class="section-heading">
+          <h2>📊 Project-wise Summary</h2>
+        </div>
+        ${projectKeys.length === 0 ? `
+          <div class="entry-empty">
+            <div class="entry-empty-icon">📂</div>
+            <h3>No transactions yet</h3>
+            <p>Add a credit or expense to see project-wise summary.</p>
+          </div>
+        ` : `
+          <div class="table-wrap acc-summary-desktop">
+            <table>
+              <thead>
+                <tr>
+                  <th>Project</th>
+                  <th class="num">Credit</th>
+                  <th class="num">Expense</th>
+                  <th class="num">Salary</th>
+                  <th class="num">Net</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${projectKeys.map((p) => `
+                  <tr>
+                    <td>${escapeHtml(p)}</td>
+                    <td class="num mono">${escapeHtml(formatINR(summary[p].credit))}</td>
+                    <td class="num mono">${escapeHtml(formatINR(summary[p].expense))}</td>
+                    <td class="num mono">${escapeHtml(formatINR(summary[p].salary))}</td>
+                    <td class="num mono" style="font-weight:800; color:${summary[p].net >= 0 ? "#047857" : "#b91c1c"};">${escapeHtml(formatINR(summary[p].net))}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+          <!-- Mobile card view -->
+          <div class="acc-summary-cards">
+            ${projectKeys.map((p) => `
+              <article class="tk-card">
+                <div class="tk-card-head">
+                  <span class="tk-pill">${escapeHtml(p)}</span>
+                  <span class="tk-chip ${summary[p].net >= 0 ? "tk-chip-install" : "tk-chip-deleted"}" style="text-decoration:none;">${escapeHtml(formatINR(summary[p].net))}</span>
+                </div>
+                <div class="tk-stats">
+                  <div class="tk-stat">
+                    <span class="tk-stat-icon" style="color:#10b981;">●</span>
+                    <span class="tk-stat-label">Credit:</span>
+                    <span class="tk-stat-value">${escapeHtml(formatINR(summary[p].credit))}</span>
+                  </div>
+                  <div class="tk-stat">
+                    <span class="tk-stat-icon" style="color:#f97316;">●</span>
+                    <span class="tk-stat-label">Expense:</span>
+                    <span class="tk-stat-value">${escapeHtml(formatINR(summary[p].expense))}</span>
+                  </div>
+                  <div class="tk-stat tk-stat-full">
+                    <span class="tk-stat-icon" style="color:#8b5cf6;">●</span>
+                    <span class="tk-stat-label">Salary:</span>
+                    <span class="tk-stat-value">${escapeHtml(formatINR(summary[p].salary))}</span>
+                  </div>
+                </div>
+              </article>
+            `).join("")}
+          </div>
+        `}
+      </section>
+
+      <!-- Recent transactions -->
+      <section class="card">
+        <div class="section-heading">
+          <h2>🕒 Recent Transactions</h2>
+        </div>
+        ${recent.length === 0 ? `
+          <p style="color:#94a3b8; text-align:center; padding: 1rem 0;">No transactions yet.</p>
+        ` : `
+          <div class="table-wrap acc-tx-desktop">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Project</th>
+                  <th>Description</th>
+                  <th class="num">Amount</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${recent.map((tx) => {
+                  const isOut = tx.type === "expense" || tx.type === "salary";
+                  const typeClass = tx.type === "credit" ? "badge-ok" : tx.type === "expense" ? "badge-warn" : tx.type === "salary" ? "badge-info" : "badge";
+                  const typeLabel = tx.type === "opening" ? "Opening" : tx.type === "credit" ? "Credit" : tx.type === "salary" ? "Salary" : "Expense";
+                  return `
+                    <tr>
+                      <td class="date-cell">${escapeHtml(formatDateTime(tx.transactionDate || tx.createdAt))}</td>
+                      <td><span class="badge ${typeClass}">${escapeHtml(typeLabel)}</span></td>
+                      <td>${escapeHtml(tx.projectName || "—")}</td>
+                      <td>${escapeHtml(tx.description || "")}</td>
+                      <td class="num mono" style="font-weight:800; color:${isOut ? "#b91c1c" : "#047857"};">${isOut ? "−" : "+"} ${escapeHtml(formatINR(tx.amount))}</td>
+                      <td class="row-actions"><button type="button" class="btn btn-danger btn-sm acc-delete-tx" data-id="${tx.id}">🗑</button></td>
+                    </tr>
+                  `;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+          <div class="acc-tx-cards">
+            ${recent.map((tx) => {
+              const isOut = tx.type === "expense" || tx.type === "salary";
+              const typeLabel = tx.type === "opening" ? "Opening" : tx.type === "credit" ? "Credit" : tx.type === "salary" ? "Salary" : "Expense";
+              const chipClass = tx.type === "credit" || tx.type === "opening" ? "tk-chip-install" : tx.type === "salary" ? "tk-chip-repair" : "tk-chip-deleted";
+              return `
+                <article class="tk-card" style="margin-bottom: 0.6rem;">
+                  <div class="tk-card-head">
+                    <span class="tk-pill">${escapeHtml(tx.projectName || "Uncategorized")}</span>
+                    <span class="tk-chip ${chipClass}" style="text-decoration:none;">${escapeHtml(typeLabel)}</span>
+                  </div>
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+                    <div style="font-family: var(--font-mono); font-size: 1.1rem; font-weight: 800; color: ${isOut ? "#b91c1c" : "#047857"};">
+                      ${isOut ? "−" : "+"} ${escapeHtml(formatINR(tx.amount))}
+                    </div>
+                    <div style="font-size: 0.72rem; color: #64748b;">${escapeHtml(formatDateTime(tx.transactionDate || tx.createdAt))}</div>
+                  </div>
+                  ${tx.description ? `<div style="font-size: 0.78rem; color: #475569; margin-bottom: 0.3rem;">${escapeHtml(tx.description)}</div>` : ""}
+                  <div class="tk-actions" style="padding-top: 0.5rem;">
+                    <button type="button" class="btn btn-danger btn-sm acc-delete-tx" data-id="${tx.id}">🗑 Delete</button>
+                  </div>
+                </article>
+              `;
+            }).join("")}
+          </div>
+        `}
+      </section>
+    </main>
+  `;
+
+  bindLogout();
+  bindAdminNav();
+  document.getElementById("addCreditBtn")?.addEventListener("click", () => openAccountsTxModal("credit"));
+  document.getElementById("addExpenseBtn")?.addEventListener("click", () => openAccountsTxModal("expense"));
+  document.getElementById("addSalaryBtn")?.addEventListener("click", () => openAccountsTxModal("salary"));
+  document.getElementById("setOpeningBtn")?.addEventListener("click", () => openAccountsTxModal("opening"));
+  document.querySelectorAll(".acc-delete-tx").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      const id = e.currentTarget.dataset.id;
+      handleAccountsDeleteTx(id);
+    });
+  });
+}
+
+function openAccountsTxModal(type) {
+  const today = new Date().toISOString().slice(0, 10);
+  const projOptions = accountsProjects
+    .map((p) => `<option value="${escapeHtml(p.name)}"></option>`)
+    .join("");
+
+  const titles = {
+    opening: "🏁 Set Opening Balance",
+    credit: "＋ Add Credit",
+    expense: "－ Add Expense",
+    salary: "👤 Add Salary",
+  };
+  const hints = {
+    opening: "Aapke paas abhi kitna paisa hai? Iske baad credit/expense add karke balance maintain hoga.",
+    credit: "Kis project se paise mile? Project ka naam type karo, naya bhi add ho jaayega.",
+    expense: "Kis project pe kharch hua? Project select karo aur amount enter karo.",
+    salary: "Kis project ka salary paid? Person ka naam description me likho.",
+  };
+
+  modal.innerHTML = `
+    <h3>${escapeHtml(titles[type])}</h3>
+    <p class="modal-desc">${escapeHtml(hints[type])}</p>
+    <div class="form-grid">
+      <div class="field">
+        <label for="accTxAmount">Amount (₹) <span class="required">*</span></label>
+        <input type="number" id="accTxAmount" required min="0" step="0.01" placeholder="e.g. 5000" inputmode="decimal" autofocus />
+      </div>
+      ${type !== "opening" ? `
+        <div class="field">
+          <label for="accTxProject">Project <span class="required">*</span></label>
+          <input type="text" id="accTxProject" required placeholder="Type project name (or pick from list)" autocomplete="off" list="accProjectsList" />
+          <datalist id="accProjectsList">${projOptions}</datalist>
+          <p class="hint">Naya project name daal sakte ho — automatic add ho jaayega.</p>
+        </div>
+      ` : ""}
+      <div class="field full-width">
+        <label for="accTxDesc">Description / Notes</label>
+        <input type="text" id="accTxDesc" placeholder="e.g. Salary for May / Office supplies / Client payment" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="accTxDate">Date</label>
+        <input type="date" id="accTxDate" value="${today}" />
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" data-act="save">Save</button>
+    </div>
+  `;
+  modalOverlay.classList.remove("hidden");
+
+  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+  modal.querySelector('[data-act="save"]').onclick = async () => {
+    const amount = parseFloat(document.getElementById("accTxAmount").value);
+    const projInput = document.getElementById("accTxProject");
+    const projectName = projInput ? projInput.value.trim() : "";
+    const description = document.getElementById("accTxDesc").value.trim();
+    const date = document.getElementById("accTxDate").value || today;
+
+    if (!amount || amount <= 0) {
+      showToast("Please enter a valid amount.", true);
+      return;
+    }
+    if (type !== "opening" && !projectName) {
+      showToast("Please enter a project name.", true);
+      return;
+    }
+
+    try {
+      // If new project — create it
+      let projectId = null;
+      if (projectName) {
+        const existing = accountsProjects.find((p) => p.name.toLowerCase() === projectName.toLowerCase());
+        if (existing) {
+          projectId = existing.id;
+        } else {
+          const newProj = await insertAccountsProject({
+            id: "proj-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8),
+            name: projectName,
+            createdBy: currentUser,
+          });
+          accountsProjects.push(newProj);
+          projectId = newProj.id;
+        }
+      }
+      const tx = await insertAccountsTransaction({
+        id: "tx-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8),
+        type,
+        amount,
+        projectId,
+        projectName: projectName || null,
+        description,
+        transactionDate: date,
+        createdBy: currentUser,
+      });
+      accountsTransactions = [tx, ...accountsTransactions];
+      closeModal();
+      const labels = { opening: "Opening balance set", credit: "Credit added", expense: "Expense added", salary: "Salary added" };
+      showToast(`✓ ${labels[type]} (${formatINR(amount)})`);
+      render();
+    } catch (err) {
+      console.error("Save transaction failed", err);
+      showToast(err.message || "Failed to save. Run accounts-migration.sql in Supabase first.", true);
+    }
+  };
+}
+
+async function handleAccountsDeleteTx(id) {
+  const tx = accountsTransactions.find((t) => t.id === id);
+  if (!tx) return;
+  showModal(
+    `
+    <h3>Delete Transaction?</h3>
+    <p class="modal-desc">${escapeHtml(formatINR(tx.amount))} · ${escapeHtml(tx.projectName || "—")} · ${escapeHtml(tx.description || "")}</p>
+    <p class="modal-desc" style="color:#b91c1c;">This will affect your balance. Continue?</p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary modal-close">Cancel</button>
+      <button type="button" class="btn btn-danger modal-confirm">Delete</button>
+    </div>
+    `,
+    async () => {
+      try {
+        await deleteAccountsTransaction(id);
+        accountsTransactions = accountsTransactions.filter((t) => t.id !== id);
+        closeModal();
+        showToast("✓ Transaction deleted");
+        render();
+      } catch (err) {
+        showToast(err.message || "Delete failed", true);
+      }
+    }
+  );
 }
 
 
