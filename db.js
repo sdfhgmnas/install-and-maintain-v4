@@ -813,3 +813,122 @@ async function unsubscribeRealtime(channel) {
     // ignore
   }
 }
+
+// ============================================================
+// ACCOUNTS MODULE (v3.0)
+// ============================================================
+
+// ----- Projects -----
+async function fetchAccountsProjects() {
+  const { data, error } = await getDb()
+    .from("accounts_projects")
+    .select("*")
+    .order("name", { ascending: true });
+  if (error) throw error;
+  return (data || []).map((row) => ({
+    id: row.id,
+    name: row.name,
+    createdAt: row.created_at,
+    createdBy: row.created_by,
+  }));
+}
+
+async function insertAccountsProject(project) {
+  const row = {
+    id: project.id,
+    name: project.name,
+    created_by: project.createdBy || null,
+  };
+  const { data, error } = await getDb()
+    .from("accounts_projects")
+    .insert(row)
+    .select()
+    .single();
+  if (error) throw error;
+  return {
+    id: data.id,
+    name: data.name,
+    createdAt: data.created_at,
+    createdBy: data.created_by,
+  };
+}
+
+async function deleteAccountsProject(id) {
+  const { error } = await getDb().from("accounts_projects").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// ----- Transactions -----
+async function fetchAccountsTransactions() {
+  const { data, error } = await getDb()
+    .from("accounts_transactions")
+    .select("*")
+    .order("transaction_date", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(1000);
+  if (error) throw error;
+  return (data || []).map((row) => ({
+    id: row.id,
+    type: row.type,
+    amount: Number(row.amount) || 0,
+    projectId: row.project_id,
+    projectName: row.project_name || "",
+    description: row.description || "",
+    transactionDate: row.transaction_date,
+    createdAt: row.created_at,
+    createdBy: row.created_by,
+  }));
+}
+
+async function insertAccountsTransaction(tx) {
+  const row = {
+    id: tx.id,
+    type: tx.type,
+    amount: Number(tx.amount) || 0,
+    project_id: tx.projectId || null,
+    project_name: tx.projectName || null,
+    description: tx.description || null,
+    transaction_date: tx.transactionDate || new Date().toISOString().slice(0, 10),
+    created_by: tx.createdBy || null,
+  };
+  const { data, error } = await getDb()
+    .from("accounts_transactions")
+    .insert(row)
+    .select()
+    .single();
+  if (error) throw error;
+  return {
+    id: data.id,
+    type: data.type,
+    amount: Number(data.amount) || 0,
+    projectId: data.project_id,
+    projectName: data.project_name || "",
+    description: data.description || "",
+    transactionDate: data.transaction_date,
+    createdAt: data.created_at,
+    createdBy: data.created_by,
+  };
+}
+
+async function updateAccountsTransaction(id, patch) {
+  const row = {};
+  if ("type" in patch) row.type = patch.type;
+  if ("amount" in patch) row.amount = Number(patch.amount);
+  if ("projectId" in patch) row.project_id = patch.projectId || null;
+  if ("projectName" in patch) row.project_name = patch.projectName || null;
+  if ("description" in patch) row.description = patch.description;
+  if ("transactionDate" in patch) row.transaction_date = patch.transactionDate;
+  const { data, error } = await getDb()
+    .from("accounts_transactions")
+    .update(row)
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function deleteAccountsTransaction(id) {
+  const { error } = await getDb().from("accounts_transactions").delete().eq("id", id);
+  if (error) throw error;
+}
