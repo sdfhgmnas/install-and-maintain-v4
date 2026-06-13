@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "2.9.1";
+const APP_VERSION = "2.9.2";
 
 const USERS = {
   akash: { password: "akash", role: "akash" },
@@ -7105,11 +7105,6 @@ function openSupplierManager() {
 }
 
 function render() {
-  // Hide splash screen on first paint (called from index.html)
-  if (window._appReady) {
-    window._appReady();
-    window._appReady = null;
-  }
   switch (view) {
     case "login":
       renderLogin();
