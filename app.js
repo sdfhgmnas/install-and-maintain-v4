@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.0.0";
+const APP_VERSION = "3.0.1";
 
 const USERS = {
   akash: { password: "akash", role: "akash" },
@@ -4586,45 +4586,48 @@ function renderDashboard() {
     <main class="main">
       ${renderAdminNav("dashboard")}
 
-      <!-- ROW 1: Big donut charts (Fleet / SIM / Repair Progress) -->
+      <!-- ROW 1: Big donut charts (Fleet / SIM / Repair Progress) — all clickable -->
       <div class="donut-row">
-        <section class="card donut-card accent-blue">
+        <button type="button" class="card donut-card accent-blue clickable-card" data-go="installations" aria-label="View all installations">
           <div class="section-heading">
             <div>
               <h2>🚛 Fleet by GPS Model</h2>
             </div>
+            <span class="card-chevron">›</span>
           </div>
           ${donutWithLegend({
             segments: installSegments,
             centerLabel: allInstalls.length,
             centerSub: "Installs",
           })}
-        </section>
-        <section class="card donut-card accent-purple">
+        </button>
+        <button type="button" class="card donut-card accent-purple clickable-card" data-go="sim-db" aria-label="View SIM database">
           <div class="section-heading">
             <div>
               <h2>📶 SIM Status</h2>
             </div>
+            <span class="card-chevron">›</span>
           </div>
           ${donutWithLegend({
             segments: simSegments,
             centerLabel: allSims.length,
             centerSub: "SIMs",
           })}
-        </section>
-        <section class="card donut-card accent-orange">
+        </button>
+        <button type="button" class="card donut-card accent-orange clickable-card" data-go="pending" aria-label="View repair progress">
           <div class="section-heading">
             <div>
               <h2>⚙️ Repair Progress</h2>
-              ${pendingCount ? `<button type="button" class="btn btn-warn btn-sm" data-go="pending">Resolve →</button>` : ""}
             </div>
+            <span class="card-chevron">›</span>
           </div>
           ${donutWithLegend({
             segments: repairSegments,
             centerLabel: pendingCount,
             centerSub: "Pending",
           })}
-        </section>
+          ${pendingCount ? `<div class="donut-cta">⚠️ ${pendingCount} pending — tap to resolve</div>` : ""}
+        </button>
       </div>
 
       <!-- ROW 2: Colorful primary stats -->
