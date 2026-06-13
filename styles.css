@@ -6535,3 +6535,173 @@ html, body, .app {
     margin-right: 0 !important;
   }
 }
+
+/* ============================================================
+   v3.0 — Donut alignment fix + Accounts module
+   ============================================================ */
+
+/* ===== Donut card: center content within card on desktop ===== */
+.donut-card-body {
+  justify-content: center !important;
+  align-items: center !important;
+  gap: 1.8rem !important;
+  max-width: 100%;
+}
+
+.donut-wrap {
+  flex: 0 0 auto !important;
+}
+
+.donut-legend {
+  flex: 0 1 auto !important;
+  min-width: 0;
+}
+
+/* On larger screens, allow more breathing room */
+@media (min-width: 881px) {
+  .donut-card {
+    padding: 1rem 1.25rem 1.1rem !important;
+  }
+  .donut-card-body {
+    gap: 2rem !important;
+  }
+  .donut-wrap {
+    width: 160px !important;
+    max-width: 160px !important;
+  }
+  .donut-legend {
+    min-width: 180px;
+  }
+}
+
+/* ===== Accounts: hero balance card ===== */
+.acc-hero {
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 60%, #ecfdf5 100%);
+  border-left: 4px solid #10b981;
+}
+
+.acc-hero.acc-hero-neg {
+  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 60%, #fef2f2 100%);
+  border-left-color: #ef4444;
+}
+
+.acc-hero-label {
+  font-size: 0.8rem;
+  color: #475569;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-bottom: 0.3rem;
+}
+
+.acc-hero-amount {
+  font-family: var(--font-mono);
+  font-size: 2.6rem;
+  font-weight: 800;
+  color: #047857;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.8rem;
+}
+
+.acc-hero-neg .acc-hero-amount {
+  color: #b91c1c;
+}
+
+.acc-hero-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.6rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  margin-bottom: 0.9rem;
+}
+
+.acc-hero-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.acc-hero-stat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 0.35rem;
+  vertical-align: middle;
+}
+
+.acc-hero-stat-label {
+  font-size: 0.7rem;
+  color: #64748b;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.acc-hero-stat-value {
+  font-family: var(--font-mono);
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.acc-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.acc-actions .btn {
+  flex: 1 1 auto;
+  min-width: 120px;
+}
+
+@media (max-width: 880px) {
+  .acc-hero-amount {
+    font-size: 2.1rem;
+  }
+  .acc-hero-stats {
+    gap: 0.4rem;
+  }
+  .acc-hero-stat-value {
+    font-size: 0.78rem;
+  }
+  .acc-hero-stat-label {
+    font-size: 0.62rem;
+  }
+  .acc-actions .btn {
+    min-width: 0;
+    padding: 0.55rem 0.5rem;
+    font-size: 0.78rem;
+  }
+}
+
+/* ===== Accounts: mobile vs desktop summary toggle ===== */
+.acc-summary-cards,
+.acc-tx-cards {
+  display: none;
+}
+
+@media (max-width: 880px) {
+  .acc-summary-desktop,
+  .acc-tx-desktop {
+    display: none;
+  }
+  .acc-summary-cards,
+  .acc-tx-cards {
+    display: block;
+  }
+}
+
+/* Right-align numeric table columns */
+.num {
+  text-align: right;
+}
+
+.badge-info {
+  background: #ede9fe;
+  color: #5b21b6;
+}
