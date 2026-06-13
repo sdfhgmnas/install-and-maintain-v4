@@ -6289,3 +6289,248 @@ body {
     margin-top: 0.5rem;
   }
 }
+
+/* ============================================================
+   v2.9.1 — MOBILE-FIRST OVERHAUL
+   Fixes: nav overflow + donut empty space + horizontal scroll
+   ============================================================ */
+
+/* ===== Hard reset: no horizontal scroll ANYWHERE on mobile ===== */
+html, body, .app {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+/* ===== Top nav: clean grid layout, no text overlap ===== */
+
+/* Defaults: show long labels on desktop */
+.nav-pill .nav-icon { display: none; }
+.nav-pill .nav-label-short { display: none; }
+.nav-pill .nav-label-long { display: inline; }
+
+/* Mobile: icon-on-top + short label-below, hide long label */
+@media (max-width: 880px) {
+  .admin-nav {
+    display: grid !important;
+    grid-template-columns: repeat(6, 1fr) !important;
+    gap: 0.1rem !important;
+    padding: 0.4rem 0.3rem !important;
+    margin: -0.5rem -0.85rem 0.6rem !important;
+    background: white !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    position: sticky !important;
+    top: calc(env(safe-area-inset-top) + 0px) !important;
+    z-index: 100 !important;
+    box-shadow: 0 2px 4px rgba(15, 23, 42, 0.04) !important;
+    overflow: visible !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  .admin-nav .nav-pill {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 0.15rem !important;
+    background: transparent !important;
+    border: none !important;
+    color: #64748b !important;
+    padding: 0.45rem 0.1rem 0.4rem !important;
+    border-radius: 8px !important;
+    min-height: 52px !important;
+    min-width: 0 !important;
+    cursor: pointer;
+    overflow: hidden;
+    transition: background 0.12s, color 0.12s;
+  }
+
+  .admin-nav .nav-pill:active {
+    background: rgba(8, 145, 178, 0.08) !important;
+    transform: scale(0.95);
+  }
+
+  .admin-nav .nav-pill.active {
+    color: #0891b2 !important;
+    background: rgba(8, 145, 178, 0.06) !important;
+  }
+
+  /* Show ONLY icon + short label on mobile */
+  .admin-nav .nav-pill .nav-icon {
+    display: block !important;
+    font-size: 1.35rem !important;
+    line-height: 1 !important;
+    font-weight: 400 !important;
+  }
+
+  .admin-nav .nav-pill .nav-label-short {
+    display: block !important;
+    font-size: 0.6rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.02em !important;
+    text-transform: uppercase !important;
+    line-height: 1.1 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: clip !important;
+    max-width: 100% !important;
+  }
+
+  .admin-nav .nav-pill .nav-label-long {
+    display: none !important;
+  }
+
+  /* Footer nav (Timeline + Deletion log) — hide on mobile, accessible elsewhere */
+  .admin-footer-nav {
+    display: none !important;
+  }
+}
+
+/* Very small phones: even tighter */
+@media (max-width: 380px) {
+  .admin-nav .nav-pill .nav-label-short {
+    font-size: 0.55rem !important;
+  }
+  .admin-nav .nav-pill .nav-icon {
+    font-size: 1.25rem !important;
+  }
+  .admin-nav .nav-pill {
+    min-height: 48px !important;
+    padding: 0.4rem 0.08rem 0.35rem !important;
+  }
+}
+
+/* ===== DONUT CARDS: kill all empty space ===== */
+
+@media (max-width: 880px) {
+  /* The donut row stops being a grid on mobile, becomes a flex column */
+  .donut-row {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 0.6rem !important;
+  }
+
+  .donut-card {
+    padding: 0.7rem 0.85rem !important;
+    min-height: auto !important;
+    height: auto !important;
+  }
+
+  /* Restructure donut card body for mobile: donut center on top, legend below */
+  .donut-card-body {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 0.7rem !important;
+    padding: 0.15rem 0 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+  }
+
+  .donut-wrap {
+    flex: 0 0 auto !important;
+    width: 110px !important;
+    max-width: 110px !important;
+    min-width: 110px !important;
+    align-self: center !important;
+    margin: 0 !important;
+  }
+
+  .donut-wrap svg {
+    width: 100% !important;
+    height: auto !important;
+    display: block !important;
+  }
+
+  .donut-legend {
+    flex: 1 1 auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 0.35rem !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+  }
+
+  .donut-legend-row {
+    display: flex !important;
+    align-items: center !important;
+    gap: 0.4rem !important;
+    line-height: 1.2 !important;
+    padding: 0 !important;
+    min-height: 0 !important;
+  }
+
+  .donut-legend-num {
+    font-size: 0.95rem !important;
+    font-weight: 800 !important;
+    line-height: 1 !important;
+  }
+
+  .donut-legend-pct {
+    font-size: 0.66rem !important;
+    color: #94a3b8 !important;
+  }
+
+  .donut-legend-label {
+    font-size: 0.7rem !important;
+    color: #64748b !important;
+    margin-left: 0.15rem !important;
+  }
+
+  .donut-legend-dot {
+    width: 8px !important;
+    height: 8px !important;
+    border-radius: 50% !important;
+  }
+
+  /* Section heading inside donut card tighter */
+  .donut-card .section-heading {
+    margin: 0 0 0.55rem !important;
+    padding: 0 0 0.4rem !important;
+    border-bottom: 1px solid #f1f5f9 !important;
+  }
+
+  .donut-card .section-heading h2 {
+    font-size: 0.92rem !important;
+    line-height: 1.2 !important;
+    margin: 0 !important;
+  }
+}
+
+/* Even on very small phones, donut shouldn't shrink too much */
+@media (max-width: 360px) {
+  .donut-wrap {
+    width: 95px !important;
+    max-width: 95px !important;
+    min-width: 95px !important;
+  }
+}
+
+/* ===== Container padding to prevent overflow ===== */
+.app, .main {
+  box-sizing: border-box;
+}
+
+@media (max-width: 880px) {
+  .main {
+    padding: 0 0.85rem !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  .card {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    overflow: hidden;
+  }
+
+  .header {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+  }
+}
