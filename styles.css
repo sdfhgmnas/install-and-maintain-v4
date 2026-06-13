@@ -5879,13 +5879,14 @@ body {
   align-items: center;
   justify-content: center;
   gap: 1rem;
-  transition: opacity 0.4s, transform 0.4s;
+  transition: opacity 0.4s, transform 0.4s, visibility 0.4s;
 }
 
 .splash.splash-fade {
   opacity: 0;
   transform: scale(1.05);
   pointer-events: none;
+  visibility: hidden;
 }
 
 .splash-logo {
