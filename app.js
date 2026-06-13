@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "2.9.0";
+const APP_VERSION = "2.9.1";
 
 const USERS = {
   akash: { password: "akash", role: "akash" },
@@ -4208,19 +4208,23 @@ function renderTimeline() {
    ============================================================ */
 
 const ADMIN_NAV = [
-  { key: "dashboard", label: "🏠 Home", view: "dashboard" },
-  { key: "installations", label: "🚛 Installations", view: "installations" },
-  { key: "repairs", label: "🛠️ Repair Work", view: "repairs" },
-  { key: "pending", label: "⚙️ Repair Progress", view: "pending" },
-  { key: "sim-db", label: "📶 SIM Database", view: "sim-db" },
-  { key: "stock", label: "📦 Stock", view: "stock" },
+  { key: "dashboard",     view: "dashboard",     icon: "⌂", label: "Home",      labelLong: "Home" },
+  { key: "installations", view: "installations", icon: "⊞", label: "Installs",  labelLong: "Installations" },
+  { key: "repairs",       view: "repairs",       icon: "⚒", label: "Repairs",   labelLong: "Repair Work" },
+  { key: "pending",       view: "pending",       icon: "◷", label: "Progress",  labelLong: "Repair Progress" },
+  { key: "sim-db",        view: "sim-db",        icon: "≣", label: "SIMs",      labelLong: "SIM Database" },
+  { key: "stock",         view: "stock",         icon: "▦", label: "Stock",     labelLong: "Stock" },
 ];
 
 function renderAdminNav(activeKey) {
   return `
     <div class="admin-nav">${ADMIN_NAV.map(
       (n) =>
-        `<button type="button" class="nav-pill ${n.key === activeKey ? "active" : ""}" data-nav="${n.view}">${n.label}</button>`
+        `<button type="button" class="nav-pill ${n.key === activeKey ? "active" : ""}" data-nav="${n.view}">
+          <span class="nav-icon">${n.icon}</span>
+          <span class="nav-label-short">${escapeHtml(n.label)}</span>
+          <span class="nav-label-long">${escapeHtml(n.labelLong)}</span>
+        </button>`
     ).join("")}</div>
     <div class="admin-footer-nav">
       <button type="button" class="nav-link-sm ${activeKey === "timeline" ? "active" : ""}" data-nav="timeline">📅 Vehicle Timeline</button>
