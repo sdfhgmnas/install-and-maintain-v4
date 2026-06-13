@@ -5459,3 +5459,833 @@ body {
     linear-gradient(to bottom, #f59e0b 0, #f59e0b 22px, transparent 22px, transparent calc(100% - 22px), #f59e0b calc(100% - 22px), #f59e0b 100%) right / 3px 100% no-repeat;
   z-index: 5;
 }
+
+/* ============================================================
+   v2.8.7 — Akash "My Entries" as a clean card list (not table)
+   ============================================================ */
+
+.entry-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin-top: 0.5rem;
+}
+
+.entry-card {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-left: 4px solid var(--entry-accent, #3b82f6);
+  border-radius: 12px;
+  padding: 0.85rem 1rem 0.9rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  transition: transform 0.12s, box-shadow 0.15s;
+}
+
+.entry-card.entry-install { --entry-accent: #10b981; }   /* green */
+.entry-card.entry-repair  { --entry-accent: #3b82f6; }   /* blue */
+.entry-card.entry-deleted {
+  --entry-accent: #ef4444;
+  background: linear-gradient(135deg, #fef2f2 0%, #fff5f5 100%);
+  opacity: 0.9;
+}
+
+.entry-card:hover {
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+  transform: translateY(-1px);
+}
+
+.entry-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.55rem;
+}
+
+.entry-type-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 0.22rem 0.6rem;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+
+.entry-type-chip span {
+  font-size: 0.9rem;
+  letter-spacing: 0;
+}
+
+.entry-type-install {
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+}
+
+.entry-type-repair {
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+}
+
+.entry-type-deleted {
+  background: rgba(239, 68, 68, 0.15);
+  color: #b91c1c;
+}
+
+.entry-type-sub {
+  font-weight: 600;
+  opacity: 0.7;
+  letter-spacing: 0.02em;
+}
+
+.entry-time {
+  font-size: 0.72rem;
+  color: #6b7280;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.entry-card-body {
+  margin-bottom: 0.6rem;
+}
+
+.entry-vehicle {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0 0 0.2rem;
+  letter-spacing: -0.01em;
+  font-family: var(--font-mono);
+  word-break: break-word;
+}
+
+.entry-deleted .entry-vehicle s,
+.entry-deleted .entry-detail s {
+  text-decoration: line-through;
+  text-decoration-color: rgba(239, 68, 68, 0.7);
+  text-decoration-thickness: 1.5px;
+  color: #6b7280;
+}
+
+.entry-detail {
+  font-size: 0.85rem;
+  color: #475569;
+  margin: 0;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.entry-reason {
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+  color: #991b1b;
+  background: rgba(239, 68, 68, 0.08);
+  padding: 0.42rem 0.65rem;
+  border-radius: 8px;
+  border-left: 3px solid #ef4444;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.entry-deleted-on {
+  margin-top: 0.45rem;
+  font-size: 0.7rem;
+  color: #9ca3af;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.entry-card-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  padding-top: 0.55rem;
+  border-top: 1px solid #f1f5f9;
+}
+
+.entry-card-actions .btn {
+  flex: 0 0 auto;
+  padding: 0.42rem 0.85rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+@media (max-width: 640px) {
+  .entry-card {
+    padding: 0.75rem 0.85rem;
+  }
+  .entry-card-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+  }
+  .entry-time {
+    font-size: 0.68rem;
+  }
+  .entry-vehicle {
+    font-size: 0.98rem;
+  }
+  .entry-detail {
+    font-size: 0.78rem;
+  }
+  .entry-card-actions {
+    justify-content: stretch;
+  }
+  .entry-card-actions .btn {
+    flex: 1;
+  }
+}
+
+/* Empty state */
+.entry-empty {
+  text-align: center;
+  padding: 2.5rem 1rem 2rem;
+  color: #6b7280;
+}
+
+.entry-empty-icon {
+  font-size: 3rem;
+  margin-bottom: 0.85rem;
+  opacity: 0.4;
+}
+
+.entry-empty h3 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #475569;
+  margin: 0 0 0.4rem;
+}
+
+.entry-empty p {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  margin: 0;
+}
+
+/* ============================================================
+   v2.8.9 — Mobile UX overhaul:
+   • Top sticky nav (bottom bar hidden on mobile)
+   • Donut card: flex-start alignment, no empty space above
+   • Cleaner nav icons + compact mobile layout
+   ============================================================ */
+
+/* HIDE the bottom tab bar entirely — nav moves to top on mobile */
+.bottom-tab-bar {
+  display: none !important;
+}
+
+/* Adjust app padding since bottom bar is gone */
+@media (max-width: 880px) {
+  .app {
+    padding-bottom: 1rem !important;
+  }
+}
+
+/* Top admin nav: TALLER, more app-like on mobile (replaces bottom bar) */
+@media (max-width: 880px) {
+  .admin-nav {
+    display: grid !important;
+    grid-template-columns: repeat(6, 1fr);
+    overflow: visible;
+    gap: 0.15rem;
+    padding: 0.5rem 0.4rem;
+    margin: -0.6rem -0.85rem 0.7rem;
+    background: white;
+    border-bottom: 1px solid #e5e7eb;
+    position: sticky;
+    top: calc(env(safe-area-inset-top) + 0px);
+    z-index: 100;
+    box-shadow: 0 2px 4px rgba(15, 23, 42, 0.04);
+  }
+
+  .admin-nav .nav-pill {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.18rem;
+    background: transparent;
+    border: none;
+    color: #6b7280;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 0.4rem 0.15rem 0.35rem;
+    border-radius: 8px;
+    min-height: 52px;
+    line-height: 1.1;
+    text-transform: uppercase;
+    transition: color 0.12s, background 0.12s;
+  }
+
+  .admin-nav .nav-pill:active {
+    background: rgba(8, 145, 178, 0.08);
+    transform: scale(0.95);
+  }
+
+  .admin-nav .nav-pill.active {
+    color: #0891b2;
+    background: rgba(8, 145, 178, 0.06);
+  }
+
+  /* Hide all emoji prefixes in nav labels — we use real SVG icons */
+  .admin-nav .nav-pill {
+    font-size: 0;
+  }
+
+  .admin-nav .nav-pill::before {
+    font-size: 1.4rem;
+    line-height: 1;
+    font-weight: 400;
+  }
+
+  .admin-nav .nav-pill::after {
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    margin-top: 0.15rem;
+    text-transform: uppercase;
+    line-height: 1.1;
+  }
+
+  /* Map data-nav values to icons + labels (simple, clean) */
+  .admin-nav .nav-pill[data-nav="dashboard"]::before     { content: "⌂"; }
+  .admin-nav .nav-pill[data-nav="dashboard"]::after      { content: "Home"; }
+
+  .admin-nav .nav-pill[data-nav="installations"]::before { content: "⊞"; }
+  .admin-nav .nav-pill[data-nav="installations"]::after  { content: "Installs"; }
+
+  .admin-nav .nav-pill[data-nav="repairs"]::before       { content: "⚒"; }
+  .admin-nav .nav-pill[data-nav="repairs"]::after        { content: "Repairs"; }
+
+  .admin-nav .nav-pill[data-nav="pending"]::before       { content: "◷"; }
+  .admin-nav .nav-pill[data-nav="pending"]::after        { content: "Progress"; }
+
+  .admin-nav .nav-pill[data-nav="sim-db"]::before        { content: "≣"; }
+  .admin-nav .nav-pill[data-nav="sim-db"]::after         { content: "SIMs"; }
+
+  .admin-nav .nav-pill[data-nav="stock"]::before         { content: "▦"; }
+  .admin-nav .nav-pill[data-nav="stock"]::after          { content: "Stock"; }
+
+  /* Active state — colored icon */
+  .admin-nav .nav-pill.active::before {
+    color: #0891b2;
+    text-shadow: 0 0 0 currentColor;
+  }
+
+  /* Show footer audit links collapsed in a smaller strip */
+  .admin-footer-nav {
+    display: flex !important;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0 0.7rem;
+    font-size: 0.7rem;
+    border-top: 1px solid #f1f5f9;
+    margin-top: 1rem;
+  }
+}
+
+/* ===== Donut card: kill the empty space above the donut ===== */
+.donut-card-body {
+  align-items: flex-start !important;  /* top-align instead of center */
+  padding: 0.3rem 0 0.1rem !important;
+}
+
+.donut-wrap {
+  align-self: center !important; /* keep donut visually centered on its row */
+}
+
+/* Compact mobile donut: smaller, takes less vertical space */
+@media (max-width: 880px) {
+  .donut-card {
+    padding: 0.7rem 0.85rem 0.85rem !important;
+  }
+  .donut-card .section-heading {
+    margin-bottom: 0.35rem !important;
+    padding-bottom: 0.4rem !important;
+  }
+  .donut-card-body {
+    gap: 0.7rem !important;
+  }
+  .donut-wrap {
+    width: 38% !important;
+    max-width: 130px !important;
+  }
+  .donut-legend {
+    gap: 0.4rem !important;
+  }
+  .donut-legend-num {
+    font-size: 0.95rem;
+  }
+  .donut-legend-pct {
+    font-size: 0.68rem;
+  }
+  .donut-legend-label {
+    font-size: 0.7rem;
+  }
+}
+
+/* Even tighter on small phones */
+@media (max-width: 380px) {
+  .donut-wrap {
+    width: 42% !important;
+    max-width: 120px !important;
+  }
+  .donut-legend-row {
+    gap: 0.02rem !important;
+  }
+}
+
+/* ===== Sticky header smaller on mobile ===== */
+@media (max-width: 880px) {
+  .header {
+    padding: calc(0.55rem + env(safe-area-inset-top)) 0.85rem 0.5rem !important;
+    margin-bottom: 0.4rem !important;
+  }
+  .header h1 {
+    font-size: 1rem !important;
+  }
+  .header p,
+  .header .header-subtitle {
+    font-size: 0.7rem !important;
+  }
+}
+
+/* ===== Remove unnecessary margins on cards on mobile ===== */
+@media (max-width: 880px) {
+  .card {
+    margin-bottom: 0.7rem !important;
+    padding: 0.85rem 0.9rem 0.9rem !important;
+  }
+  .dash-row {
+    gap: 0.6rem !important;
+  }
+}
+
+/* ============================================================
+   v2.9.0 — Trakzee-style cards + splash + offline banner
+   ============================================================ */
+
+/* ===== Splash screen ===== */
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: linear-gradient(160deg, #0891b2 0%, #06849e 50%, #047485 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  transition: opacity 0.4s, transform 0.4s;
+}
+
+.splash.splash-fade {
+  opacity: 0;
+  transform: scale(1.05);
+  pointer-events: none;
+}
+
+.splash-logo {
+  width: 100px;
+  height: 100px;
+  border-radius: 24px;
+  background: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  animation: splash-pulse 1.6s ease-in-out infinite;
+}
+
+.splash-logo img {
+  width: 80px;
+  height: 80px;
+}
+
+.splash-name {
+  color: white;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.splash-spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid rgba(255, 255, 255, 0.25);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: splash-spin 0.8s linear infinite;
+  margin-top: 0.5rem;
+}
+
+.splash-tagline {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  margin-top: 1rem;
+}
+
+@keyframes splash-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes splash-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+}
+
+/* ===== Offline banner (sticky at top) ===== */
+.offline-banner {
+  position: fixed;
+  top: env(safe-area-inset-top);
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  background: #ef4444;
+  color: white;
+  padding: 0.55rem 0.9rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+  animation: offline-slide-down 0.3s ease-out;
+}
+
+.offline-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: white;
+  animation: offline-blink 1.2s infinite;
+}
+
+@keyframes offline-slide-down {
+  from { transform: translateY(-100%); }
+  to { transform: translateY(0); }
+}
+
+@keyframes offline-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0.3; }
+}
+
+/* ============================================================
+   TRAKZEE-STYLE ENTRY CARDS
+   Used for: Akash My Entries + Admin Installations list
+   ============================================================ */
+
+.tk-card {
+  background: white;
+  border-radius: 14px;
+  padding: 0.85rem 1rem 0.95rem;
+  margin-bottom: 0.85rem;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+  border: 1px solid #f1f5f9;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Header pill + chevron row */
+.tk-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.85rem;
+}
+
+.tk-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: #e0f2fe;       /* light blue, like Trakzee */
+  color: #075985;            /* dark blue text */
+  padding: 0.42rem 0.85rem;
+  border-radius: 999px;
+  font-size: 0.88rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  max-width: 80%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tk-pill.tk-pill-install { background: #dcfce7; color: #14532d; }
+.tk-pill.tk-pill-repair  { background: #dbeafe; color: #1e3a8a; }
+.tk-pill.tk-pill-deleted { background: #fee2e2; color: #991b1b; text-decoration: line-through; }
+
+.tk-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  padding: 0.18rem 0.5rem;
+  border-radius: 6px;
+  text-transform: uppercase;
+  margin-left: 0.4rem;
+}
+
+.tk-chip.tk-chip-install { background: rgba(16, 185, 129, 0.15); color: #065f46; }
+.tk-chip.tk-chip-repair { background: rgba(59, 130, 246, 0.15); color: #1e40af; }
+.tk-chip.tk-chip-deleted { background: rgba(239, 68, 68, 0.18); color: #991b1b; }
+
+.tk-arrow {
+  color: #94a3b8;
+  font-size: 1.4rem;
+  background: none;
+  border: none;
+  padding: 0.2rem 0.4rem;
+  cursor: pointer;
+  font-weight: 300;
+  transition: color 0.15s;
+}
+
+.tk-arrow:hover { color: #475569; }
+
+/* Flow visualization (Start ───● ICON ●─── End) */
+.tk-flow {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.85rem;
+}
+
+.tk-flow-box {
+  background: #f0fdf4;          /* light green for start */
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  text-align: left;
+  min-width: 0;
+}
+
+.tk-flow-box.tk-flow-end {
+  background: #f1f5f9;          /* light gray for end */
+}
+
+.tk-flow-value {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #14532d;
+  margin-bottom: 0.12rem;
+  letter-spacing: -0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tk-flow-end .tk-flow-value { color: #475569; }
+
+.tk-flow-label {
+  font-size: 0.65rem;
+  color: #64748b;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tk-flow-connector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.tk-flow-line {
+  width: 100%;
+  height: 2px;
+  background: repeating-linear-gradient(to right, #cbd5e1 0 4px, transparent 4px 8px);
+  margin: 0 auto;
+}
+
+.tk-flow-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: #fde68a;          /* amber circle like Trakzee fuel icon */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.15rem;
+  box-shadow: 0 2px 6px rgba(217, 119, 6, 0.2);
+}
+
+.tk-flow-icon-label {
+  font-size: 0.7rem;
+  color: #92400e;
+  font-weight: 700;
+  margin-top: 0.15rem;
+  white-space: nowrap;
+}
+
+/* Divider */
+.tk-divider {
+  height: 1px;
+  background: #f1f5f9;
+  margin: 0.65rem -0.25rem 0.85rem;
+}
+
+/* Stats grid (2 columns with icons) */
+.tk-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.7rem 1rem;
+  margin-bottom: 0.7rem;
+}
+
+.tk-stat {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  min-width: 0;
+}
+
+.tk-stat-icon {
+  font-size: 0.9rem;
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+  color: #64748b;
+}
+
+.tk-stat-label {
+  color: #64748b;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.tk-stat-value {
+  color: #0f172a;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.tk-stat.tk-stat-full {
+  grid-column: 1 / -1;
+}
+
+/* Footer info (bottom rows with subtle look) */
+.tk-footer {
+  border-top: 1px solid #f1f5f9;
+  padding-top: 0.6rem;
+  margin-top: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.tk-footer-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.74rem;
+  color: #64748b;
+}
+
+.tk-footer-icon {
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+
+.tk-footer-label {
+  font-weight: 500;
+}
+
+.tk-footer-value {
+  margin-left: auto;
+  font-weight: 700;
+  color: #334155;
+  font-family: var(--font-mono);
+}
+
+/* Action buttons row */
+.tk-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid #f1f5f9;
+}
+
+.tk-actions .btn {
+  flex: 1;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+/* Deleted state */
+.tk-card.tk-deleted {
+  background: linear-gradient(135deg, #fef2f2 0%, #ffffff 100%);
+  border-color: #fecaca;
+}
+
+.tk-card.tk-deleted .tk-flow,
+.tk-card.tk-deleted .tk-stats {
+  opacity: 0.55;
+}
+
+.tk-reason {
+  background: rgba(239, 68, 68, 0.08);
+  border-left: 3px solid #ef4444;
+  padding: 0.5rem 0.7rem;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  color: #991b1b;
+  font-weight: 500;
+  margin-top: 0.6rem;
+}
+
+/* Mobile tweaks */
+@media (max-width: 380px) {
+  .tk-card {
+    padding: 0.75rem 0.85rem 0.85rem;
+  }
+  .tk-pill {
+    font-size: 0.82rem;
+    padding: 0.38rem 0.7rem;
+  }
+  .tk-flow-value {
+    font-size: 0.72rem;
+  }
+  .tk-flow-label {
+    font-size: 0.6rem;
+  }
+  .tk-stat-value, .tk-stat-label {
+    font-size: 0.72rem;
+  }
+}
+
+/* ===== Installations: desktop table vs mobile card grid ===== */
+.installs-card-grid {
+  display: none;
+}
+
+@media (max-width: 880px) {
+  .installs-table-desktop {
+    display: none;
+  }
+  .installs-card-grid {
+    display: block;
+    margin-top: 0.5rem;
+  }
+}
