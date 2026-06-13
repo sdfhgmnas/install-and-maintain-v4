@@ -5,12 +5,44 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.0.1";
+const APP_VERSION = "3.1.0";
 
 const USERS = {
-  akash: { password: "akash", role: "akash" },
-  admin: { password: "password1", role: "admin" },
+  akash:   { password: "akash",     role: "akash" },
+  admin:   { password: "password1", role: "admin" },
+  abhinav: { password: "abhinav",   role: "stock-manager" },
 };
+
+// Default page permissions (used as fallback when DB doesn't have a row)
+const DEFAULT_PERMISSIONS = {
+  admin:   { displayName: "Admin",                   isAdmin: true,  allowedPages: ["dashboard","installations","repairs","pending","sim-db","stock","accounts","timeline","deletions","user-access"] },
+  akash:   { displayName: "Akash (Field Worker)",    isAdmin: false, allowedPages: ["akash-home","install","repair"] },
+  abhinav: { displayName: "Abhinav (Stock Manager)", isAdmin: false, allowedPages: ["stock"] },
+};
+
+// Loaded from DB on app init; falls back to DEFAULT_PERMISSIONS
+let userPermissions = {};
+
+function getUserPerms(username) {
+  return userPermissions[username] || DEFAULT_PERMISSIONS[username] || null;
+}
+
+function userCanAccess(pageKey) {
+  if (!currentUser) return false;
+  const perms = getUserPerms(currentUser);
+  if (!perms) return false;
+  if (perms.isAdmin) return true; // admin gets everything
+  return (perms.allowedPages || []).includes(pageKey);
+}
+
+function landingPageFor(username) {
+  const perms = getUserPerms(username);
+  if (!perms) return "login";
+  if (username === "akash") return "akash-home";
+  if (username === "admin") return "dashboard";
+  // Other users: land on their first allowed page
+  return (perms.allowedPages || [])[0] || "login";
+}
 
 function validateLogin(username, password) {
   const user = USERS[username.toLowerCase().trim()];
@@ -1013,6 +1045,15 @@ async function refreshAllData() {
     } catch (err) {
       console.warn("accounts_transactions table missing or unreadable", err?.message || err);
       accountsTransactions = [];
+    }
+    // User permissions — soft-fail to default if migration not run
+    try {
+      const perms = await withTimeout(fetchUserPermissions(), 20000, "Fetch user permissions");
+      userPermissions = {};
+      perms.forEach((p) => { userPermissions[p.username] = p; });
+    } catch (err) {
+      console.warn("user_permissions table missing — using DEFAULT_PERMISSIONS", err?.message || err);
+      userPermissions = { ...DEFAULT_PERMISSIONS };
     }
     lastSyncedAt = new Date();
   } finally {
@@ -2056,7 +2097,12 @@ function renderHeader(title, subtitle) {
           currentUser
             ? `<div class="header-actions">
                 ${liveBadgeMarkup()}
-                <span class="user-badge">${currentUser === "akash" ? "👷 Akash" : "🛡️ Admin"}</span>
+                <span class="user-badge">${(() => {
+                  if (currentUser === "akash") return "👷 Akash";
+                  if (currentUser === "admin") return "🛡️ Admin";
+                  if (currentUser === "abhinav") return "📦 Abhinav";
+                  return `👤 ${escapeHtml(currentUser || "User")}`;
+                })()}</span>
                 <button type="button" class="btn btn-outline btn-sm" id="logoutBtn">Logout</button>
               </div>`
             : ""
@@ -2119,7 +2165,7 @@ function renderLogin() {
 
   document.getElementById("loginForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const username = document.getElementById("loginUser").value;
+    const username = document.getElementById("loginUser").value.toLowerCase().trim();
     const password = document.getElementById("loginPass").value;
     const role = validateLogin(username, password);
 
@@ -2129,8 +2175,8 @@ function renderLogin() {
       return;
     }
 
-    currentUser = role;
-    view = role === "akash" ? "akash-home" : "dashboard";
+    currentUser = username; // Store actual username not role (so multiple users with same role still differ)
+    view = landingPageFor(username);
     renderLoading("Loading data from Supabase...");
     try {
       await refreshAllData();
@@ -4232,9 +4278,19 @@ const ADMIN_NAV = [
   { key: "accounts",      view: "accounts",      icon: "₹", label: "Accounts",  labelLong: "Accounts" },
 ];
 
+// Returns nav items the current user can access
+function navForCurrentUser() {
+  const perms = getUserPerms(currentUser);
+  if (!perms) return [];
+  if (perms.isAdmin) return ADMIN_NAV;
+  return ADMIN_NAV.filter((n) => (perms.allowedPages || []).includes(n.key));
+}
+
 function renderAdminNav(activeKey) {
+  const navItems = navForCurrentUser();
+  const perms = getUserPerms(currentUser);
   return `
-    <div class="admin-nav">${ADMIN_NAV.map(
+    <div class="admin-nav">${navItems.map(
       (n) =>
         `<button type="button" class="nav-pill ${n.key === activeKey ? "active" : ""}" data-nav="${n.view}">
           <span class="nav-icon">${n.icon}</span>
@@ -4242,11 +4298,15 @@ function renderAdminNav(activeKey) {
           <span class="nav-label-long">${escapeHtml(n.labelLong)}</span>
         </button>`
     ).join("")}</div>
-    <div class="admin-footer-nav">
-      <button type="button" class="nav-link-sm ${activeKey === "timeline" ? "active" : ""}" data-nav="timeline">📅 Vehicle Timeline</button>
-      <span class="nav-sep">·</span>
-      <button type="button" class="nav-link-sm ${activeKey === "deletions" ? "active" : ""}" data-nav="deletions">🗑️ Deletion Audit Log${deletionLog.length ? ` (${deletionLog.length})` : ""}</button>
-    </div>
+    ${perms?.isAdmin ? `
+      <div class="admin-footer-nav">
+        <button type="button" class="nav-link-sm ${activeKey === "timeline" ? "active" : ""}" data-nav="timeline">📅 Vehicle Timeline</button>
+        <span class="nav-sep">·</span>
+        <button type="button" class="nav-link-sm ${activeKey === "deletions" ? "active" : ""}" data-nav="deletions">🗑️ Deletion Audit Log${deletionLog.length ? ` (${deletionLog.length})` : ""}</button>
+        <span class="nav-sep">·</span>
+        <button type="button" class="nav-link-sm ${activeKey === "user-access" ? "active" : ""}" data-nav="user-access">👥 User Access</button>
+      </div>
+    ` : ""}
     ${renderMobileBottomBar(activeKey)}
   `;
 }
@@ -6221,9 +6281,35 @@ function renderStockPage() {
     });
   });
 
-  document.getElementById("addStockBtn")?.addEventListener("click", () =>
-    openStockEditor(null, allCategoryOptions)
-  );
+  // Old single-item editor still available, but NEW default: bulk scan flow
+  document.getElementById("addStockBtn")?.addEventListener("click", () => {
+    // Show choice modal — Quick scan (bulk) vs Detailed entry
+    showModal(`
+      <h3>Add to Stock</h3>
+      <p class="modal-desc">How do you want to add items?</p>
+      <div style="display:flex; flex-direction:column; gap:0.6rem; margin: 1rem 0;">
+        <button type="button" class="btn btn-primary" id="chooseBulk" style="padding: 0.85rem;">
+          📷 Bulk Scan (multiple items, same type)
+        </button>
+        <button type="button" class="btn btn-outline" id="chooseSingle" style="padding: 0.85rem;">
+          ✏️ Detailed Entry (one item, full fields)
+        </button>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary modal-close">Cancel</button>
+      </div>
+    `, null);
+    setTimeout(() => {
+      document.getElementById("chooseBulk")?.addEventListener("click", () => {
+        closeModal();
+        openBulkStockAdd();
+      });
+      document.getElementById("chooseSingle")?.addEventListener("click", () => {
+        closeModal();
+        openStockEditor(null, allCategoryOptions);
+      });
+    }, 50);
+  });
   document.getElementById("manageCatsBtn")?.addEventListener("click", openCategoryManager);
   document.getElementById("manageSuppliersBtn")?.addEventListener("click", openSupplierManager);
   document.getElementById("exportStockBtn")?.addEventListener("click", exportStockToExcel);
@@ -7161,6 +7247,9 @@ function render() {
     case "accounts":
       renderAccountsPage();
       break;
+    case "user-access":
+      renderUserAccessPage();
+      break;
     case "deletions":
       renderDeletionsPage();
       break;
@@ -7536,6 +7625,392 @@ async function handleAccountsDeleteTx(id) {
       }
     }
   );
+}
+
+// ============================================================
+// USER ACCESS PAGE (v3.1) — Admin manages page permissions
+// ============================================================
+
+function renderUserAccessPage() {
+  const allPages = [
+    { key: "dashboard",     label: "🏠 Home (Admin Dashboard)" },
+    { key: "installations", label: "🚛 Installations" },
+    { key: "repairs",       label: "🛠️ Repair Work" },
+    { key: "pending",       label: "⚙️ Repair Progress" },
+    { key: "sim-db",        label: "📶 SIM Database" },
+    { key: "stock",         label: "📦 Stock" },
+    { key: "accounts",      label: "₹ Accounts" },
+    { key: "timeline",      label: "📅 Vehicle Timeline" },
+    { key: "deletions",     label: "🗑️ Deletion Audit Log" },
+    { key: "user-access",   label: "👥 User Access (admin only)" },
+    { key: "akash-home",    label: "📋 Akash Home (field worker)" },
+    { key: "install",       label: "🆕 New Install (form)" },
+    { key: "repair",        label: "🔧 Report Repair (form)" },
+  ];
+
+  const allUsers = Object.keys(USERS);
+
+  app.innerHTML = `
+    ${renderHeader("User Access", "Manage who can see which pages")}
+    <main class="main">
+      ${renderAdminNav("user-access")}
+      <section class="card">
+        <div class="section-heading">
+          <h2>👥 User Access Control</h2>
+        </div>
+        <p class="hint" style="margin-bottom: 1rem;">Check the pages each user should be able to access. Changes save instantly.</p>
+
+        ${allUsers.map((username) => {
+          const perms = getUserPerms(username) || { displayName: username, isAdmin: false, allowedPages: [] };
+          const isAdminUser = perms.isAdmin || username === "admin";
+          return `
+            <div class="user-access-card">
+              <div class="user-access-head">
+                <div>
+                  <h3 class="user-access-name">${escapeHtml(perms.displayName || username)}</h3>
+                  <code class="user-access-username">@${escapeHtml(username)}</code>
+                </div>
+                ${isAdminUser ? `<span class="badge badge-ok">🛡️ Admin (full access)</span>` : ""}
+              </div>
+              ${isAdminUser ? "" : `
+                <div class="user-access-pages">
+                  ${allPages.map((p) => `
+                    <label class="user-access-page-check">
+                      <input type="checkbox" data-user="${escapeHtml(username)}" data-page="${escapeHtml(p.key)}" ${(perms.allowedPages || []).includes(p.key) ? "checked" : ""} />
+                      <span>${escapeHtml(p.label)}</span>
+                    </label>
+                  `).join("")}
+                </div>
+              `}
+            </div>
+          `;
+        }).join("")}
+      </section>
+    </main>
+  `;
+
+  bindLogout();
+  bindAdminNav();
+
+  document.querySelectorAll(".user-access-page-check input").forEach((cb) => {
+    cb.addEventListener("change", async (e) => {
+      const username = e.target.dataset.user;
+      const page = e.target.dataset.page;
+      const perms = getUserPerms(username) || { ...DEFAULT_PERMISSIONS[username] } || { displayName: username, isAdmin: false, allowedPages: [] };
+      const allowed = new Set(perms.allowedPages || []);
+      if (e.target.checked) allowed.add(page);
+      else allowed.delete(page);
+      const newPerms = {
+        username,
+        displayName: perms.displayName,
+        isAdmin: !!perms.isAdmin,
+        allowedPages: Array.from(allowed),
+        updatedBy: currentUser,
+      };
+      try {
+        await upsertUserPermission(newPerms);
+        userPermissions[username] = newPerms;
+        showToast(`✓ ${username} access updated`);
+      } catch (err) {
+        showToast(err.message || "Failed to save. Run user-permissions-migration.sql first.", true);
+        e.target.checked = !e.target.checked; // revert
+      }
+    });
+  });
+}
+
+// ============================================================
+// BULK STOCK SCAN FLOW (v3.1)
+// Click Add → enter metadata → scan multiple IMEIs → save all
+// ============================================================
+
+let _bulkScanState = {
+  active: false,
+  meta: null,
+  scanned: [], // array of IMEI strings
+  scanner: null,
+};
+
+function openBulkStockAdd() {
+  const categories = [...new Set(stockItems.map((s) => s.category).filter(Boolean))];
+  const supplierOptions = suppliers.map((s) => `<option value="${escapeHtml(s.name)}"></option>`).join("");
+  const categoryOptions = [...new Set([
+    ...stockCategories.map((c) => c.name),
+    ...categories,
+  ])].map((c) => `<option value="${escapeHtml(c)}"></option>`).join("");
+
+  modal.innerHTML = `
+    <h3>📦 Add Stock Items — Step 1 of 2</h3>
+    <p class="modal-desc">Enter item details. Next step, you'll scan each unit's IMEI/serial.</p>
+    <div class="form-grid">
+      <div class="field full-width">
+        <label for="bulkItemName">Item Name <span class="required">*</span></label>
+        <input type="text" id="bulkItemName" required placeholder="e.g. GPS Device - Normal" autocomplete="off" autofocus />
+      </div>
+      <div class="field">
+        <label for="bulkItemCategory">Category</label>
+        <input type="text" id="bulkItemCategory" list="bulkCatList" placeholder="e.g. GPS, SIM-JIO, Sensor" autocomplete="off" />
+        <datalist id="bulkCatList">${categoryOptions}</datalist>
+      </div>
+      <div class="field">
+        <label for="bulkItemSupplier">Supplier</label>
+        <input type="text" id="bulkItemSupplier" list="bulkSupList" placeholder="Supplier name" autocomplete="off" />
+        <datalist id="bulkSupList">${supplierOptions}</datalist>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" data-act="continue">Continue to Scan →</button>
+    </div>
+  `;
+  modalOverlay.classList.remove("hidden");
+
+  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+  modal.querySelector('[data-act="continue"]').onclick = () => {
+    const name = document.getElementById("bulkItemName").value.trim();
+    const category = document.getElementById("bulkItemCategory").value.trim() || "Uncategorized";
+    const supplier = document.getElementById("bulkItemSupplier").value.trim() || "";
+    if (!name) {
+      showToast("Please enter item name.", true);
+      return;
+    }
+    _bulkScanState = {
+      active: true,
+      meta: { name, category, supplier },
+      scanned: [],
+      scanner: null,
+    };
+    openBulkScanModal();
+  };
+}
+
+function openBulkScanModal() {
+  const HQR = window.Html5Qrcode;
+  const libraryReady = typeof HQR !== "undefined";
+  const cameraReady = libraryReady && window.isSecureContext;
+
+  modal.innerHTML = `
+    <h3>📷 Scan Items — ${escapeHtml(_bulkScanState.meta.name)}</h3>
+    <p class="modal-desc">Scan each unit's IMEI / serial. Tap <strong>＋ Scan Another</strong> after each. Done karke <strong>Save All</strong>.</p>
+
+    <div class="bulk-scan-stats">
+      <span class="bulk-stat-label">Items Scanned</span>
+      <span class="bulk-stat-num" id="bulkScanCount">0</span>
+    </div>
+
+    ${cameraReady ? `
+      <div class="qr-reader-wrap bulk-scan-viewfinder">
+        <div id="qrReader"></div>
+        <div class="qr-status" id="qrStatus">Starting back camera…</div>
+      </div>
+    ` : `
+      <div class="hint hint-warn" style="margin-bottom: 0.7rem;">
+        📷 Camera unavailable — type IMEIs manually below.
+      </div>
+    `}
+
+    <div class="manual-entry-block">
+      <label for="bulkManualImei">Or type manually:</label>
+      <div class="input-with-scan" style="margin-top: 0.4rem;">
+        <input type="text" id="bulkManualImei" placeholder="Type IMEI / serial" inputmode="numeric" autocomplete="off" />
+        <button type="button" class="btn btn-primary btn-sm" id="bulkManualAdd">+ Add</button>
+      </div>
+    </div>
+
+    <div class="bulk-scanned-list">
+      <h4>Scanned Items <span class="bulk-list-count" id="bulkListCount">(0)</span></h4>
+      <ol id="bulkScannedList" class="bulk-list">
+        <li class="bulk-list-empty">No items scanned yet</li>
+      </ol>
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
+      <button type="button" class="btn btn-primary btn-block" id="bulkSaveAll" disabled>Save All (0)</button>
+    </div>
+  `;
+  modal.classList.add("modal-wide");
+  modalOverlay.classList.remove("hidden");
+
+  const updateUI = () => {
+    const list = document.getElementById("bulkScannedList");
+    const count = _bulkScanState.scanned.length;
+    document.getElementById("bulkScanCount").textContent = count;
+    document.getElementById("bulkListCount").textContent = `(${count})`;
+    const saveBtn = document.getElementById("bulkSaveAll");
+    if (saveBtn) {
+      saveBtn.disabled = count === 0;
+      saveBtn.textContent = `Save All (${count})`;
+    }
+    if (!list) return;
+    if (!count) {
+      list.innerHTML = `<li class="bulk-list-empty">No items scanned yet</li>`;
+      return;
+    }
+    list.innerHTML = _bulkScanState.scanned
+      .map((imei, idx) => `
+        <li class="bulk-list-item">
+          <span class="bulk-list-num">${idx + 1}.</span>
+          <span class="bulk-list-imei mono">${escapeHtml(imei)}</span>
+          <button type="button" class="bulk-list-remove" data-idx="${idx}" aria-label="Remove">×</button>
+        </li>
+      `).join("");
+    list.querySelectorAll(".bulk-list-remove").forEach((b) => {
+      b.addEventListener("click", () => {
+        const idx = parseInt(b.dataset.idx, 10);
+        _bulkScanState.scanned.splice(idx, 1);
+        updateUI();
+      });
+    });
+  };
+
+  const addImei = (raw) => {
+    const v = String(raw || "").trim();
+    if (!v) return;
+    if (_bulkScanState.scanned.includes(v)) {
+      showToast("Already scanned!", true);
+      // Brief haptic via shake — just visual via toast
+      return;
+    }
+    _bulkScanState.scanned.push(v);
+    updateUI();
+    // Brief visual feedback
+    const count = document.getElementById("bulkScanCount");
+    if (count) {
+      count.style.transform = "scale(1.3)";
+      setTimeout(() => { count.style.transform = ""; }, 200);
+    }
+    // Vibration if supported
+    try { navigator.vibrate && navigator.vibrate(50); } catch {}
+  };
+
+  const cleanup = async () => {
+    try {
+      if (_bulkScanState.scanner) {
+        await _bulkScanState.scanner.stop().catch(() => {});
+        await _bulkScanState.scanner.clear().catch(() => {});
+      }
+    } catch {}
+    _bulkScanState = { active: false, meta: null, scanned: [], scanner: null };
+    modal.classList.remove("modal-wide");
+    closeModal();
+  };
+
+  // Manual entry
+  const manualBtn = document.getElementById("bulkManualAdd");
+  const manualInput = document.getElementById("bulkManualImei");
+  manualBtn?.addEventListener("click", () => {
+    const v = manualInput.value.trim();
+    if (v) {
+      addImei(v);
+      manualInput.value = "";
+      manualInput.focus();
+    }
+  });
+  manualInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      manualBtn?.click();
+    }
+  });
+
+  modal.querySelector('[data-act="cancel"]').onclick = () => {
+    if (_bulkScanState.scanned.length > 0) {
+      if (!confirm(`Discard ${_bulkScanState.scanned.length} scanned items?`)) return;
+    }
+    cleanup();
+  };
+
+  document.getElementById("bulkSaveAll")?.addEventListener("click", async () => {
+    await saveBulkStockItems();
+  });
+
+  modalOverlay.onclick = null; // disable click-outside-to-close during bulk scan
+
+  // Init camera
+  if (!cameraReady) return;
+
+  const setStatus = (t) => {
+    const s = document.getElementById("qrStatus");
+    if (s) s.textContent = t;
+  };
+
+  setTimeout(async () => {
+    try {
+      _bulkScanState.scanner = new HQR("qrReader", { verbose: false });
+      const HQRFormats = window.Html5QrcodeSupportedFormats;
+      const allFormats = HQRFormats ? [
+        HQRFormats.CODE_128, HQRFormats.CODE_39, HQRFormats.CODE_93,
+        HQRFormats.EAN_13, HQRFormats.QR_CODE, HQRFormats.DATA_MATRIX,
+      ] : undefined;
+      await _bulkScanState.scanner.start(
+        { facingMode: "environment" },
+        {
+          fps: 15,
+          qrbox: (vw, vh) => ({ width: Math.min(vw * 0.9, 320), height: Math.min(vh * 0.4, 130) }),
+          formatsToSupport: allFormats,
+          experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+        },
+        (decodedText) => {
+          addImei(decodedText);
+          setStatus(`✓ Scanned. Total: ${_bulkScanState.scanned.length}. Hold steady for next…`);
+        },
+        () => {}
+      );
+      setStatus(`📷 Camera ready — scan next IMEI`);
+    } catch (err) {
+      console.warn("Camera start failed:", err);
+      setStatus("Camera unavailable — use manual input below.");
+    }
+  }, 100);
+}
+
+async function saveBulkStockItems() {
+  const meta = _bulkScanState.meta;
+  const imeis = [..._bulkScanState.scanned];
+  if (!imeis.length) {
+    showToast("Nothing to save.", true);
+    return;
+  }
+  const saveBtn = document.getElementById("bulkSaveAll");
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = `Saving ${imeis.length}…`;
+  }
+  try {
+    const newItems = [];
+    for (const imei of imeis) {
+      const item = {
+        id: "stock-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8),
+        name: meta.name,
+        category: meta.category || "Uncategorized",
+        supplier: meta.supplier || "",
+        quantity: 1,
+        unit: "unit",
+        lowStockThreshold: 1,
+        metadata: { imei },
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser,
+        notes: `Bulk-added with ${imeis.length - 1} other unit${imeis.length > 2 ? "s" : ""}`,
+      };
+      const saved = await insertStockItem(item);
+      newItems.push(saved);
+    }
+    stockItems = [...newItems, ...stockItems];
+    // Cleanup state
+    _bulkScanState = { active: false, meta: null, scanned: [], scanner: null };
+    modal.classList.remove("modal-wide");
+    closeModal();
+    showToast(`✓ Added ${imeis.length} stock items`);
+    render();
+  } catch (err) {
+    console.error("Bulk save failed:", err);
+    showToast(err.message || "Save failed", true);
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = `Save All (${imeis.length})`;
+    }
+  }
 }
 
 
