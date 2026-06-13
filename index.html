@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no, maximum-scale=1.0" />
   <meta name="theme-color" content="#0891b2" />
-
+ 
   <!-- PWA / iOS / Android home-screen install support -->
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -17,27 +17,43 @@
   <link rel="icon" type="image/svg+xml" href="icon.svg" />
   <link rel="apple-touch-icon" sizes="192x192" href="icon-192.png" />
   <link rel="shortcut icon" href="icon-192.png" />
-
+ 
   <title>GPS Maintenance Tracker</title>
-
+ 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
     href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet"
   />
-
+ 
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <!-- Splash screen — shown until app.js loads + first render done -->
+  <div id="splash" class="splash">
+    <div class="splash-logo">
+      <img src="icon-192.png" alt="GPS Tracker" />
+    </div>
+    <div class="splash-name">GPS Tracker</div>
+    <div class="splash-spinner"></div>
+    <div class="splash-tagline">TASR BharatNext · Loading…</div>
+  </div>
+ 
+  <!-- Offline status banner -->
+  <div id="offlineBanner" class="offline-banner hidden" role="status">
+    <span class="offline-dot"></span>
+    <span>📡 You're offline — changes will sync when connection returns</span>
+  </div>
+ 
   <div id="app" class="app"></div>
-
+ 
   <div class="modal-overlay hidden" id="modalOverlay">
     <div class="modal" id="modal" role="dialog" aria-modal="true"></div>
   </div>
-
+ 
   <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
-
+ 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <!-- Barcode scanner with CDN fallback chain (some networks block one CDN) -->
@@ -47,7 +63,7 @@
   <!-- <script src="config.js"></script> -->
   <script src="db.js"></script>
   <script src="app.js"></script>
-
+ 
   <!-- Service worker registration for PWA / offline shell -->
   <script>
     if ("serviceWorker" in navigator) {
@@ -55,6 +71,46 @@
         navigator.serviceWorker.register("sw.js").catch(() => {});
       });
     }
+ 
+    // Online / offline status indicator
+    const offlineBanner = document.getElementById("offlineBanner");
+    const updateOnlineStatus = () => {
+      if (!offlineBanner) return;
+      if (navigator.onLine) {
+        offlineBanner.classList.add("hidden");
+      } else {
+        offlineBanner.classList.remove("hidden");
+      }
+    };
+    window.addEventListener("online", updateOnlineStatus);
+    window.addEventListener("offline", updateOnlineStatus);
+    updateOnlineStatus();
+ 
+    // Hide splash screen after app loads (max 4s safety timeout)
+    const hideSplash = () => {
+      const splash = document.getElementById("splash");
+      if (splash) {
+        splash.classList.add("splash-fade");
+        setTimeout(() => splash.remove(), 500);
+      }
+    };
+    window.addEventListener("load", () => {
+      // Wait for app first render — app.js calls window._appReady() when done
+      window._appReady = hideSplash;
+      setTimeout(hideSplash, 4000); // safety fallback
+    });
   </script>
 </body>
 </html>
+ 
+
+
+
+
+
+
+
+
+
+
+
