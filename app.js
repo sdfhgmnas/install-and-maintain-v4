@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "2.8.5";
+const APP_VERSION = "2.9.0";
 
 const USERS = {
   akash: { password: "akash", role: "akash" },
@@ -2231,114 +2231,225 @@ function renderAkashHome() {
             <span>This month</span>
           </div>
         </div>
-        <div class="table-wrap compact-table">
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Type</th>
-                <th>Vehicle</th>
-                <th>IMEI / Work</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              ${(() => {
-                // Build live entries + deletion stubs (so Akash can see
-                // his own deletions with a strikethrough and reason).
-                const myDeletions = deletionLog.filter(
-                  (d) =>
-                    d.deletedBy === "akash" &&
-                    (d.entityType === "installation" || d.entityType === "maintenance")
-                );
-                const entries = [
-                  ...myInstallations.map((inst) => ({
-                    id: inst.id,
-                    kind: "install",
-                    deleted: false,
-                    date: inst.createdAt,
-                    type: "Installation",
-                    vehicle: inst.vehicleNo,
-                    detail: getCurrentImei(inst),
-                  })),
-                  ...myMaintenance.map((record) => ({
-                    id: record.id,
-                    kind: "repair",
-                    deleted: false,
-                    date: record.createdAt,
-                    type: "Repair",
-                    vehicle: record.vehicleNo,
-                    detail: workLabels(record),
-                  })),
-                  ...myDeletions.map((d) => {
-                    const snap = d.snapshot || {};
-                    const isInstall = d.entityType === "installation";
-                    const detail = isInstall
-                      ? (snap.imeiHistory?.find?.((h) => h.active)?.value ||
-                          snap.imeiHistory?.[0]?.value ||
-                          "—")
-                      : (snap.simChange || snap.deviceChange || snap.deviceOutForRepair || snap.sensorOutForRepair
-                          ? [
-                              snap.simChange ? "SIM" : null,
-                              snap.deviceChange ? "Device" : null,
-                              snap.deviceOutForRepair ? "Device→Service" : null,
-                              snap.sensorOutForRepair ? "Sensor→Service" : null,
-                            ].filter(Boolean).join(" · ")
-                          : snap.otherWorkText || "Repair");
-                    return {
-                      id: d.id,
-                      kind: isInstall ? "install" : "repair",
-                      deleted: true,
-                      date: d.deletedAt,
-                      type: isInstall ? "Installation" : "Repair",
-                      vehicle: snap.vehicleNo || (d.entityLabel || "").split(" ")[0] || "—",
-                      detail,
-                      reason: d.reason || "",
-                      originalDate: snap.createdAt || null,
-                    };
-                  }),
-                ];
-                entries.sort((a, b) => new Date(b.date) - new Date(a.date));
-                const sliced = entries.slice(0, 15);
-                if (!sliced.length) return `<tr class="empty-row"><td colspan="5">No entries from Akash yet.</td></tr>`;
-                return sliced
-                  .map((entry) => {
-                    if (entry.deleted) {
-                      return `
-                        <tr class="akash-row-deleted">
-                          <td class="date-cell"><s>${escapeHtml(formatDateTime(entry.originalDate || entry.date))}</s></td>
-                          <td>
-                            <span class="badge ${entry.type === "Installation" ? "badge-ok" : "badge-repair"} faded">${escapeHtml(entry.type)}</span>
-                            <span class="badge badge-deleted">🗑️ DELETED</span>
-                          </td>
-                          <td><s>${escapeHtml(entry.vehicle)}</s></td>
-                          <td>
-                            <s>${escapeHtml(entry.detail)}</s>
-                            ${entry.reason ? `<div class="deleted-reason">Reason: ${escapeHtml(entry.reason)}</div>` : ""}
-                          </td>
-                          <td class="row-actions">
-                            <span class="deleted-on">Deleted ${escapeHtml(formatDateTime(entry.date))}</span>
-                          </td>
-                        </tr>
-                      `;
-                    }
-                    return `
-                      <tr>
-                        <td class="date-cell">${escapeHtml(formatDateTime(entry.date))}</td>
-                        <td><span class="badge ${entry.type === "Installation" ? "badge-ok" : "badge-repair"}">${escapeHtml(entry.type)}</span></td>
-                        <td>${escapeHtml(entry.vehicle)}</td>
-                        <td>${escapeHtml(entry.detail)}</td>
-                        <td class="row-actions">
-                          <button type="button" class="btn btn-outline btn-sm akash-edit" data-kind="${entry.kind}" data-id="${escapeHtml(entry.id)}">✎ Edit</button>
-                          <button type="button" class="btn btn-danger btn-sm akash-delete" data-kind="${entry.kind}" data-id="${escapeHtml(entry.id)}">Delete</button>
-                        </td>
-                      </tr>
-                    `;
-                  })
-                  .join("");
-              })()}
-            </tbody>
-          </table>
+        <div class="entry-list">
+          ${(() => {
+            const myDeletions = deletionLog.filter(
+              (d) =>
+                d.deletedBy === "akash" &&
+                (d.entityType === "installation" || d.entityType === "maintenance")
+            );
+            const entries = [
+              ...myInstallations.map((inst) => ({
+                id: inst.id,
+                kind: "install",
+                deleted: false,
+                date: inst.createdAt,
+                vehicle: inst.vehicleNo,
+                imei: getCurrentImei(inst),
+                model: inst.gpsModel,
+                sim: inst.simIccid || (inst.iccidHistory?.find?.((h) => h.active)?.value || ""),
+                mac: inst.macId,
+                sensor: inst.sensorNo,
+              })),
+              ...myMaintenance.map((record) => ({
+                id: record.id,
+                kind: "repair",
+                deleted: false,
+                date: record.createdAt,
+                vehicle: record.vehicleNo,
+                imei: record.imeiNo || "",
+                work: workLabels(record),
+                simChange: record.simChange,
+                deviceChange: record.deviceChange,
+                deviceOutForRepair: record.deviceOutForRepair,
+                sensorOutForRepair: record.sensorOutForRepair,
+                otherWorkText: record.otherWorkText || "",
+              })),
+              ...myDeletions.map((d) => {
+                const snap = d.snapshot || {};
+                const isInstall = d.entityType === "installation";
+                return {
+                  id: d.id,
+                  kind: isInstall ? "install" : "repair",
+                  deleted: true,
+                  date: d.deletedAt,
+                  vehicle: snap.vehicleNo || (d.entityLabel || "").split(" ")[0] || "—",
+                  imei: isInstall
+                    ? (snap.imeiHistory?.find?.((h) => h.active)?.value || snap.imeiHistory?.[0]?.value || "")
+                    : (snap.imeiNo || ""),
+                  model: snap.gpsModel || "",
+                  sim: snap.simIccid || (snap.iccidHistory?.find?.((h) => h.active)?.value || ""),
+                  mac: snap.macId || "",
+                  sensor: snap.sensorNo || "",
+                  work: isInstall ? "" : [
+                    snap.simChange ? "SIM" : null,
+                    snap.deviceChange ? "Device" : null,
+                    snap.deviceOutForRepair ? "Device→Service" : null,
+                    snap.sensorOutForRepair ? "Sensor→Service" : null,
+                  ].filter(Boolean).join(" · ") || snap.otherWorkText || "Repair",
+                  reason: d.reason || "",
+                  originalDate: snap.createdAt || null,
+                };
+              }),
+            ];
+            entries.sort((a, b) => new Date(b.date) - new Date(a.date));
+            const sliced = entries.slice(0, 15);
+            if (!sliced.length) return `
+              <div class="entry-empty">
+                <div class="entry-empty-icon">📋</div>
+                <h3>No entries yet</h3>
+                <p>Tap "New Installation" to start.</p>
+              </div>
+            `;
+
+            // Helper: last 6 digits for compact display
+            const tail = (s, n = 6) => {
+              const v = String(s || "");
+              return v.length > n ? "…" + v.slice(-n) : v || "—";
+            };
+
+            return sliced
+              .map((entry) => {
+                const dateDisp = formatDateTime(entry.originalDate || entry.date);
+                if (entry.deleted) {
+                  return `
+                    <article class="tk-card tk-deleted">
+                      <div class="tk-card-head">
+                        <span class="tk-pill tk-pill-deleted">${escapeHtml(entry.vehicle)}</span>
+                        <span class="tk-chip tk-chip-deleted">🗑 DELETED · ${entry.kind === "install" ? "INSTALL" : "REPAIR"}</span>
+                      </div>
+                      ${entry.kind === "install" ? `
+                        <div class="tk-flow">
+                          <div class="tk-flow-box">
+                            <div class="tk-flow-value">${escapeHtml(tail(entry.imei))}</div>
+                            <div class="tk-flow-label">IMEI</div>
+                          </div>
+                          <div class="tk-flow-connector">
+                            <div class="tk-flow-icon">📡</div>
+                            <div class="tk-flow-icon-label">${escapeHtml(entry.model || "—")}</div>
+                          </div>
+                          <div class="tk-flow-box tk-flow-end">
+                            <div class="tk-flow-value">${escapeHtml(tail(entry.sim))}</div>
+                            <div class="tk-flow-label">SIM</div>
+                          </div>
+                        </div>
+                      ` : `
+                        <div class="tk-stats" style="margin-bottom: 0.4rem;">
+                          <div class="tk-stat tk-stat-full">
+                            <span class="tk-stat-icon">🛠️</span>
+                            <span class="tk-stat-label">Work:</span>
+                            <span class="tk-stat-value" style="white-space:normal;">${escapeHtml(entry.work)}</span>
+                          </div>
+                        </div>
+                      `}
+                      <div class="tk-footer">
+                        <div class="tk-footer-row">
+                          <span class="tk-footer-icon">📅</span>
+                          <span class="tk-footer-label">Created on:</span>
+                          <span class="tk-footer-value">${escapeHtml(dateDisp)}</span>
+                        </div>
+                        <div class="tk-footer-row">
+                          <span class="tk-footer-icon">🗑️</span>
+                          <span class="tk-footer-label">Deleted on:</span>
+                          <span class="tk-footer-value">${escapeHtml(formatDateTime(entry.date))}</span>
+                        </div>
+                      </div>
+                      ${entry.reason ? `<div class="tk-reason">⚠️ Reason: ${escapeHtml(entry.reason)}</div>` : ""}
+                    </article>
+                  `;
+                }
+                if (entry.kind === "install") {
+                  const showMacSensor = (entry.mac || entry.sensor) && entry.model !== "Normal";
+                  return `
+                    <article class="tk-card">
+                      <div class="tk-card-head">
+                        <span class="tk-pill tk-pill-install">${escapeHtml(entry.vehicle)}</span>
+                        <span class="tk-chip tk-chip-install">🆕 Install</span>
+                      </div>
+                      <div class="tk-flow">
+                        <div class="tk-flow-box">
+                          <div class="tk-flow-value">${escapeHtml(tail(entry.imei))}</div>
+                          <div class="tk-flow-label">IMEI</div>
+                        </div>
+                        <div class="tk-flow-connector">
+                          <div class="tk-flow-icon">📡</div>
+                          <div class="tk-flow-icon-label">${escapeHtml(entry.model || "—")}</div>
+                        </div>
+                        <div class="tk-flow-box tk-flow-end">
+                          <div class="tk-flow-value">${escapeHtml(tail(entry.sim))}</div>
+                          <div class="tk-flow-label">SIM</div>
+                        </div>
+                      </div>
+                      ${showMacSensor ? `
+                        <div class="tk-divider"></div>
+                        <div class="tk-stats">
+                          ${entry.mac ? `
+                            <div class="tk-stat">
+                              <span class="tk-stat-icon">📱</span>
+                              <span class="tk-stat-label">MAC:</span>
+                              <span class="tk-stat-value">${escapeHtml(tail(entry.mac, 8))}</span>
+                            </div>
+                          ` : ""}
+                          ${entry.sensor ? `
+                            <div class="tk-stat">
+                              <span class="tk-stat-icon">📊</span>
+                              <span class="tk-stat-label">Sensor:</span>
+                              <span class="tk-stat-value">${escapeHtml(entry.sensor)}</span>
+                            </div>
+                          ` : ""}
+                        </div>
+                      ` : ""}
+                      <div class="tk-footer">
+                        <div class="tk-footer-row">
+                          <span class="tk-footer-icon">📅</span>
+                          <span class="tk-footer-label">Created on:</span>
+                          <span class="tk-footer-value">${escapeHtml(dateDisp)}</span>
+                        </div>
+                      </div>
+                      <div class="tk-actions">
+                        <button type="button" class="btn btn-outline btn-sm akash-edit" data-kind="install" data-id="${escapeHtml(entry.id)}">✎ Edit</button>
+                        <button type="button" class="btn btn-danger btn-sm akash-delete" data-kind="install" data-id="${escapeHtml(entry.id)}">🗑 Delete</button>
+                      </div>
+                    </article>
+                  `;
+                }
+                // repair
+                return `
+                  <article class="tk-card">
+                    <div class="tk-card-head">
+                      <span class="tk-pill tk-pill-repair">${escapeHtml(entry.vehicle)}</span>
+                      <span class="tk-chip tk-chip-repair">🛠 Repair</span>
+                    </div>
+                    <div class="tk-stats">
+                      <div class="tk-stat tk-stat-full">
+                        <span class="tk-stat-icon">🔧</span>
+                        <span class="tk-stat-label">Work:</span>
+                        <span class="tk-stat-value" style="white-space: normal; line-height: 1.4;">${escapeHtml(entry.work)}</span>
+                      </div>
+                      ${entry.imei ? `
+                        <div class="tk-stat tk-stat-full">
+                          <span class="tk-stat-icon">📡</span>
+                          <span class="tk-stat-label">IMEI:</span>
+                          <span class="tk-stat-value">${escapeHtml(tail(entry.imei))}</span>
+                        </div>
+                      ` : ""}
+                    </div>
+                    <div class="tk-footer">
+                      <div class="tk-footer-row">
+                        <span class="tk-footer-icon">📅</span>
+                        <span class="tk-footer-label">Reported on:</span>
+                        <span class="tk-footer-value">${escapeHtml(dateDisp)}</span>
+                      </div>
+                    </div>
+                    <div class="tk-actions">
+                      <button type="button" class="btn btn-outline btn-sm akash-edit" data-kind="repair" data-id="${escapeHtml(entry.id)}">✎ Edit</button>
+                      <button type="button" class="btn btn-danger btn-sm akash-delete" data-kind="repair" data-id="${escapeHtml(entry.id)}">🗑 Delete</button>
+                    </div>
+                  </article>
+                `;
+              })
+              .join("");
+          })()}
         </div>
       </section>
     </main>
@@ -2631,18 +2742,19 @@ function renderInstallForm() {
         </div>
         <h2>New GPS Installation</h2>
 
-        <!-- GPS Type selector — Normal hides MAC + Sensor fields -->
-        <div class="field">
-          <label>GPS Type <span class="required">*</span></label>
-          <div class="seg-control" id="gpsTypeSeg">
-            <button type="button" class="seg-btn" data-type="Normal">📱 Normal</button>
-            <button type="button" class="seg-btn active" data-type="FMB">📡 FMB</button>
-            <button type="button" class="seg-btn" data-type="FMC">📡 FMC</button>
-          </div>
-          <p class="hint" id="gpsTypeHint">FMB / FMC devices need MAC ID and Sensor No. Normal devices don't.</p>
-        </div>
-
         <form id="installForm" class="form-grid">
+
+          <!-- GPS Model — also controls whether MAC + Sensor are required -->
+          <div class="field full-width">
+            <label>GPS Model <span class="required">*</span></label>
+            <div class="seg-control" id="gpsTypeSeg">
+              <button type="button" class="seg-btn" data-type="Normal">📱 Normal</button>
+              <button type="button" class="seg-btn active" data-type="FMB">📡 FMB</button>
+              <button type="button" class="seg-btn" data-type="FMC">📡 FMC</button>
+            </div>
+            <p class="hint" id="gpsTypeHint">FMB / FMC devices ko MAC ID aur Sensor No bharna zaroori hai. Normal devices ko nahi.</p>
+          </div>
+
           <div class="field">
             <label for="instImei">IMEI No <span class="required">*</span></label>
             <div class="input-with-scan">
@@ -2654,11 +2766,7 @@ function renderInstallForm() {
             <label for="instVehicle">Vehicle No <span class="required">*</span></label>
             <input type="text" id="instVehicle" required placeholder="e.g. MH12AB1234" autocomplete="off" />
           </div>
-          <div class="field">
-            <label for="instModel">GPS Model <span class="required">*</span></label>
-            <input type="text" id="instModel" required placeholder="e.g. FMB920" autocomplete="off" />
-          </div>
-          <div class="field">
+          <div class="field full-width">
             <label for="instSim">SIM ICCID (20-digit, printed on the SIM card) <span class="required">*</span></label>
             <div class="input-with-scan">
               <input type="text" id="instSim" required placeholder="e.g. 89918720507069156677" autocomplete="off" inputmode="numeric" />
@@ -2685,7 +2793,7 @@ function renderInstallForm() {
   bindLogout();
   document.getElementById("backBtn")?.addEventListener("click", () => setView("akash-home"));
 
-  // GPS Type segmented control wiring — toggle MAC + Sensor visibility
+  // GPS Model segmented control — toggle MAC + Sensor visibility
   let _gpsType = "FMB";
   const seg = document.getElementById("gpsTypeSeg");
   const fieldMac = document.getElementById("fieldMac");
@@ -2693,11 +2801,9 @@ function renderInstallForm() {
   const macInput = document.getElementById("instMac");
   const sensorInput = document.getElementById("instSensor");
   const typeHint = document.getElementById("gpsTypeHint");
-  const modelInput = document.getElementById("instModel");
 
   function applyGpsType(type) {
     _gpsType = type;
-    // Update segmented control active state
     seg?.querySelectorAll(".seg-btn").forEach((b) => {
       b.classList.toggle("active", b.dataset.type === type);
     });
@@ -2709,16 +2815,12 @@ function renderInstallForm() {
       macInput.value = "";
       sensorInput.value = "";
       if (typeHint) typeHint.textContent = "Normal GPS — MAC ID aur Sensor No ki zaroorat nahi.";
-      if (modelInput.value === "" || /^FM[BC]/.test(modelInput.value)) {
-        modelInput.placeholder = "e.g. GT06N, TK103";
-      }
     } else {
       fieldMac.style.display = "";
       fieldSensor.style.display = "";
       macInput.required = true;
       sensorInput.required = true;
       if (typeHint) typeHint.textContent = `${type} GPS — MAC ID aur Sensor No bharna zaroori hai.`;
-      modelInput.placeholder = type === "FMB" ? "e.g. FMB920, FMB964" : "e.g. FMC650, FMC880";
     }
   }
 
@@ -2785,10 +2887,10 @@ function renderInstallForm() {
 
 function handleInstallSubmit(gpsType = "FMB") {
   const isNormal = gpsType === "Normal";
+  // gpsType IS the GPS Model — no separate model input field anymore
   const fields = {
     imei: document.getElementById("instImei"),
     vehicle: document.getElementById("instVehicle"),
-    model: document.getElementById("instModel"),
     sim: document.getElementById("instSim"),
   };
   // MAC + Sensor only required for FMB / FMC
@@ -2808,6 +2910,7 @@ function handleInstallSubmit(gpsType = "FMB") {
   }
 
   const data = Object.fromEntries(Object.entries(fields).map(([k, el]) => [k, el.value.trim()]));
+  data.model = gpsType; // Normal / FMB / FMC
   if (isNormal) {
     data.mac = "";
     data.sensor = "";
@@ -4260,9 +4363,19 @@ function renderDashboard() {
   // ===== Donut chart segments =====
 
   // 1) Fleet status — Installations grouped by GPS model (top 5)
+  // Normalize known model strings so "fmb"/"FMB"/"Fmb" all count as "FMB"
+  function normalizeModel(raw) {
+    let m = String(raw || "").trim();
+    if (!m) return "Unknown";
+    const lower = m.toLowerCase();
+    if (lower === "fmb") return "FMB";
+    if (lower === "fmc") return "FMC";
+    if (lower === "normal") return "Normal";
+    return m;
+  }
   const modelCounts = {};
   for (const inst of allInstalls) {
-    const m = inst.gpsModel || "Unknown";
+    const m = normalizeModel(inst.gpsModel);
     modelCounts[m] = (modelCounts[m] || 0) + 1;
   }
   const MODEL_COLORS = ["#f97316", "#facc15", "#3b82f6", "#10b981", "#a855f7", "#ef4444", "#0891b2", "#64748b"];
@@ -4722,7 +4835,7 @@ function renderInstallationsPage() {
             <input class="hidden" type="file" id="bulkUpload" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
           </div>
         </div>
-        <div class="table-wrap">
+        <div class="table-wrap installs-table-desktop">
           <table>
             <thead><tr><th>Date</th><th>Vehicle</th><th>GPS Model</th><th>Primary SIM</th><th>MAC ID</th><th>Sensor</th><th>IMEI History</th><th>SIM History</th><th></th></tr></thead>
             <tbody>
@@ -4758,6 +4871,92 @@ function renderInstallationsPage() {
               }
             </tbody>
           </table>
+        </div>
+
+        <!-- Mobile card grid — Trakzee-style, hidden on desktop -->
+        <div class="installs-card-grid">
+          ${
+            filtered.length
+              ? filtered.map((i) => {
+                  const currentSim = getCurrentSim(i);
+                  const resolved = resolvePrimarySim(currentSim);
+                  const looksIccid = currentSim && digitsOnly(currentSim).length >= 18;
+                  const currentImei = getCurrentImei(i);
+                  const isNormal = (i.gpsModel || "").toLowerCase() === "normal";
+                  const tail = (s, n = 6) => {
+                    const v = String(s || "");
+                    return v.length > n ? "…" + v.slice(-n) : v || "—";
+                  };
+                  return `
+                    <article class="tk-card">
+                      <div class="tk-card-head">
+                        <span class="tk-pill">${escapeHtml(i.vehicleNo)}</span>
+                        <button type="button" class="tk-arrow view-tl-btn" data-id="${i.id}" title="View timeline">›</button>
+                      </div>
+                      <div class="tk-flow">
+                        <div class="tk-flow-box">
+                          <div class="tk-flow-value">${escapeHtml(tail(currentImei))}</div>
+                          <div class="tk-flow-label">IMEI</div>
+                        </div>
+                        <div class="tk-flow-connector">
+                          <div class="tk-flow-icon">📡</div>
+                          <div class="tk-flow-icon-label">${escapeHtml(i.gpsModel || "—")}</div>
+                        </div>
+                        <div class="tk-flow-box tk-flow-end">
+                          <div class="tk-flow-value">${escapeHtml(resolved ? resolved : tail(currentSim))}</div>
+                          <div class="tk-flow-label">${resolved && !looksIccid ? "PRIMARY" : "SIM"}</div>
+                        </div>
+                      </div>
+                      ${!isNormal && (i.macId || i.sensorNo) ? `
+                        <div class="tk-divider"></div>
+                        <div class="tk-stats">
+                          ${i.macId ? `
+                            <div class="tk-stat">
+                              <span class="tk-stat-icon">📱</span>
+                              <span class="tk-stat-label">MAC:</span>
+                              <span class="tk-stat-value">${escapeHtml(tail(i.macId, 8))}</span>
+                            </div>
+                          ` : ""}
+                          ${i.sensorNo ? `
+                            <div class="tk-stat">
+                              <span class="tk-stat-icon">📊</span>
+                              <span class="tk-stat-label">Sensor:</span>
+                              <span class="tk-stat-value">${escapeHtml(i.sensorNo)}</span>
+                            </div>
+                          ` : ""}
+                          ${i.secondarySim ? `
+                            <div class="tk-stat tk-stat-full">
+                              <span class="tk-stat-icon">📡</span>
+                              <span class="tk-stat-label">2nd SIM:</span>
+                              <span class="tk-stat-value">${escapeHtml(i.secondarySim)}</span>
+                            </div>
+                          ` : ""}
+                        </div>
+                      ` : ""}
+                      ${looksIccid ? `<div class="tk-reason" style="background: #fef3c7; color: #92400e; border-color: #f59e0b;">⏳ Primary number pending — set via Repair Progress</div>` : ""}
+                      <div class="tk-footer">
+                        <div class="tk-footer-row">
+                          <span class="tk-footer-icon">📅</span>
+                          <span class="tk-footer-label">Installed:</span>
+                          <span class="tk-footer-value">${escapeHtml(formatDateTime(i.createdAt))}</span>
+                        </div>
+                        ${i.createdBy ? `
+                          <div class="tk-footer-row">
+                            <span class="tk-footer-icon">👤</span>
+                            <span class="tk-footer-label">By:</span>
+                            <span class="tk-footer-value">${escapeHtml(i.createdBy)}</span>
+                          </div>
+                        ` : ""}
+                      </div>
+                      <div class="tk-actions">
+                        <button type="button" class="btn btn-outline btn-sm view-tl-btn" data-id="${i.id}">📅 Timeline</button>
+                        <button type="button" class="btn btn-primary btn-sm edit-btn" data-id="${i.id}">✎ Edit</button>
+                      </div>
+                    </article>
+                  `;
+                }).join("")
+              : `<div class="entry-empty"><div class="entry-empty-icon">📋</div><h3>No installations found</h3><p>Try a different search.</p></div>`
+          }
         </div>
       </section>
     </main>
@@ -6902,6 +7101,11 @@ function openSupplierManager() {
 }
 
 function render() {
+  // Hide splash screen on first paint (called from index.html)
+  if (window._appReady) {
+    window._appReady();
+    window._appReady = null;
+  }
   switch (view) {
     case "login":
       renderLogin();
