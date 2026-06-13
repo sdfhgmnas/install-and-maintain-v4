@@ -1,7 +1,7 @@
 // Service worker — app shell caching with network-first for HTML so updates
 // arrive quickly, and stale-while-revalidate for JS/CSS so the app loads
 // fast offline. Supabase API calls are never cached (always live).
-const VERSION = "v2.8.8";
+const VERSION = "v2.9.0";
 const SHELL = `gps-tracker-shell-${VERSION}`;
 
 const SHELL_FILES = [
