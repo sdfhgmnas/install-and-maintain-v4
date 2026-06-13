@@ -86,19 +86,15 @@
     window.addEventListener("offline", updateOnlineStatus);
     updateOnlineStatus();
  
-    // Hide splash screen after app loads (max 4s safety timeout)
-    const hideSplash = () => {
+    // Hide splash — fires 800ms after page loads (gives app time to render)
+    // Safety fallback also triggers after 5s no matter what
+    setTimeout(() => {
       const splash = document.getElementById("splash");
       if (splash) {
         splash.classList.add("splash-fade");
         setTimeout(() => splash.remove(), 500);
       }
-    };
-    window.addEventListener("load", () => {
-      // Wait for app first render — app.js calls window._appReady() when done
-      window._appReady = hideSplash;
-      setTimeout(hideSplash, 4000); // safety fallback
-    });
+    }, 800);
   </script>
 </body>
 </html>
