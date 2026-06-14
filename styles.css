@@ -5730,50 +5730,8 @@ body {
     background: rgba(8, 145, 178, 0.06);
   }
 
-  /* Hide all emoji prefixes in nav labels — we use real SVG icons */
-  .admin-nav .nav-pill {
-    font-size: 0;
-  }
-
-  .admin-nav .nav-pill::before {
-    font-size: 1.4rem;
-    line-height: 1;
-    font-weight: 400;
-  }
-
-  .admin-nav .nav-pill::after {
-    font-size: 0.62rem;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    margin-top: 0.15rem;
-    text-transform: uppercase;
-    line-height: 1.1;
-  }
-
-  /* Map data-nav values to icons + labels (simple, clean) */
-  .admin-nav .nav-pill[data-nav="dashboard"]::before     { content: "⌂"; }
-  .admin-nav .nav-pill[data-nav="dashboard"]::after      { content: "Home"; }
-
-  .admin-nav .nav-pill[data-nav="installations"]::before { content: "⊞"; }
-  .admin-nav .nav-pill[data-nav="installations"]::after  { content: "Installs"; }
-
-  .admin-nav .nav-pill[data-nav="repairs"]::before       { content: "⚒"; }
-  .admin-nav .nav-pill[data-nav="repairs"]::after        { content: "Repairs"; }
-
-  .admin-nav .nav-pill[data-nav="pending"]::before       { content: "◷"; }
-  .admin-nav .nav-pill[data-nav="pending"]::after        { content: "Progress"; }
-
-  .admin-nav .nav-pill[data-nav="sim-db"]::before        { content: "≣"; }
-  .admin-nav .nav-pill[data-nav="sim-db"]::after         { content: "SIMs"; }
-
-  .admin-nav .nav-pill[data-nav="stock"]::before         { content: "▦"; }
-  .admin-nav .nav-pill[data-nav="stock"]::after          { content: "Stock"; }
-
-  /* Active state — colored icon */
-  .admin-nav .nav-pill.active::before {
-    color: #0891b2;
-    text-shadow: 0 0 0 currentColor;
-  }
+  /* DEPRECATED in v3.1.5 — pseudo-element approach removed.
+     Real spans (.nav-icon, .nav-label-short, .nav-label-long) are used now. */
 
   /* Show footer audit links collapsed in a smaller strip */
   .admin-footer-nav {
@@ -7200,4 +7158,323 @@ button.clickable-card:focus-visible {
   z-index: 5;
   animation: scan-check-pop 0.28s ease-out;
   pointer-events: none;
+}
+
+/* ============================================================
+   v3.1.5 — Mobile polish, nav cleanup, pill wrapping
+   ============================================================ */
+
+/* ===== Vehicle pill: allow wrapping or compact ellipsis ===== */
+.tk-pill {
+  max-width: 100% !important;
+  white-space: normal !important;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.85rem;
+}
+
+@media (max-width: 640px) {
+  .tk-pill {
+    font-size: 0.8rem;
+    padding: 0.4rem 0.7rem;
+    max-width: 70%;
+  }
+}
+
+/* Card head — let pill take more space, push chip below if long */
+.tk-card-head {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.tk-chip {
+  margin-left: 0;
+  flex-shrink: 0;
+}
+
+@media (max-width: 480px) {
+  .tk-card-head {
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+}
+
+/* ===== Belt-and-braces hide of nav-label-long on mobile ===== */
+@media (max-width: 880px) {
+  .admin-nav .nav-pill .nav-label-long {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    width: 0 !important;
+    overflow: hidden !important;
+  }
+
+  /* Pseudo-element belt-and-braces — null content forces nothing to show */
+  .admin-nav .nav-pill::before,
+  .admin-nav .nav-pill::after {
+    content: none !important;
+    display: none !important;
+  }
+}
+
+/* Repair page mobile fixes — stat boxes shouldn't be empty */
+@media (max-width: 880px) {
+  .stat-row, .summary-row {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 0.6rem !important;
+  }
+  .stat-card, .summary-box {
+    min-height: auto !important;
+    padding: 0.7rem 0.85rem !important;
+  }
+  .summary-box strong,
+  .stat-num {
+    font-size: 1.4rem !important;
+    line-height: 1.1;
+  }
+  .summary-box span {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+}
+
+/* General mobile text size cleanup */
+@media (max-width: 640px) {
+  .section-heading h2 {
+    font-size: 0.96rem !important;
+  }
+  .header h1 {
+    font-size: 1.05rem !important;
+  }
+  .badge {
+    font-size: 0.65rem;
+    padding: 0.18rem 0.5rem;
+  }
+}
+
+/* Ensure no element causes horizontal overflow */
+* {
+  max-width: 100%;
+}
+
+.card, .main, section, article {
+  box-sizing: border-box;
+}
+
+/* ============================================================
+   v3.2.0 — Round 1: Mobile cards for SIM DB / Stock / Repairs
+   + Sticky search + Pending Progress mobile polish
+   ============================================================ */
+
+/* Default: hide mobile card grids, show desktop tables */
+.sims-card-grid,
+.stock-card-grid,
+.repairs-card-grid {
+  display: none;
+}
+
+@media (max-width: 880px) {
+  /* Hide desktop tables, show mobile cards */
+  .sims-table-desktop,
+  .stock-table-desktop,
+  .repairs-table-desktop {
+    display: none !important;
+  }
+  .sims-card-grid,
+  .stock-card-grid,
+  .repairs-card-grid {
+    display: block;
+    margin-top: 0.5rem;
+  }
+}
+
+/* ===== Sticky search bar (stays visible while scrolling) ===== */
+.sticky-search {
+  position: sticky;
+  top: calc(env(safe-area-inset-top) + 56px);
+  z-index: 30;
+  background: white;
+  padding: 0.5rem 0;
+  margin: 0 -0.85rem 0.6rem;
+  padding-left: 0.85rem;
+  padding-right: 0.85rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+@media (max-width: 880px) {
+  .sticky-search {
+    /* Account for the sticky admin-nav above */
+    top: calc(env(safe-area-inset-top) + 116px);
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
+  }
+}
+
+.sticky-search input[type="search"] {
+  width: 100%;
+  padding: 0.6rem 0.85rem;
+  font-size: 0.92rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.sticky-search input[type="search"]:focus {
+  background: white;
+  border-color: #0891b2;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.1);
+}
+
+/* SIM status chips inside Trakzee cards */
+.tk-chip.sim-status-status-ok      { background: rgba(16, 185, 129, 0.14); color: #047857; }
+.tk-chip.sim-status-status-warn    { background: rgba(245, 158, 11, 0.15); color: #92400e; }
+.tk-chip.sim-status-status-muted   { background: rgba(100, 116, 139, 0.15); color: #475569; }
+
+/* Warn variant of Trakzee card (for low stock / swapped SIMs) */
+.tk-card.tk-card-warn {
+  border-left: 4px solid #f59e0b;
+  background: linear-gradient(135deg, #fffbeb 0%, #ffffff 60%);
+}
+
+/* ===== Pending Progress page: mobile vehicle-group polish ===== */
+@media (max-width: 880px) {
+  .vehicle-group {
+    border-radius: 12px !important;
+    padding: 0.85rem 0.9rem !important;
+    margin-bottom: 0.7rem !important;
+  }
+  .vehicle-group-head {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 0.4rem !important;
+    margin-bottom: 0.6rem !important;
+  }
+  .vehicle-group-head h3 {
+    font-size: 0.98rem !important;
+    margin: 0 !important;
+    word-break: break-word;
+  }
+  .vehicle-group-actions {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+  .vehicle-group-actions .btn {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.78rem;
+    padding: 0.4rem 0.55rem;
+  }
+  .task-row {
+    flex-wrap: wrap !important;
+    padding: 0.55rem 0 !important;
+  }
+  .task-row .task-label {
+    font-size: 0.85rem !important;
+  }
+  .task-row .task-actions {
+    width: 100%;
+    margin-top: 0.4rem;
+    display: flex;
+    gap: 0.35rem;
+  }
+  .task-row .task-actions .btn {
+    flex: 1;
+    font-size: 0.72rem;
+    padding: 0.35rem 0.45rem;
+  }
+
+  /* Filter chips: scrollable on mobile */
+  .filter-chips {
+    display: flex !important;
+    overflow-x: auto;
+    flex-wrap: nowrap !important;
+    gap: 0.4rem;
+    padding: 0.3rem 0;
+    scrollbar-width: none;
+  }
+  .filter-chips::-webkit-scrollbar {
+    display: none;
+  }
+  .filter-chip {
+    flex: 0 0 auto;
+    font-size: 0.74rem;
+    padding: 0.35rem 0.7rem;
+    white-space: nowrap;
+  }
+}
+
+/* ===== Bulk-action buttons row on mobile: wrap properly ===== */
+@media (max-width: 880px) {
+  .bulk-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    width: 100%;
+    margin-top: 0.5rem;
+  }
+  .bulk-actions .btn {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 0.74rem;
+    padding: 0.42rem 0.55rem;
+  }
+}
+
+/* Stat / summary boxes on mobile — better grid */
+@media (max-width: 640px) {
+  .summary-grid {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 0.5rem !important;
+  }
+  .summary-grid .summary-box {
+    padding: 0.7rem 0.85rem !important;
+  }
+  .summary-grid .summary-box strong {
+    font-size: 1.5rem !important;
+  }
+  .summary-grid .summary-box span {
+    font-size: 0.7rem !important;
+  }
+}
+
+/* Stock category chips (filter row) — scrollable on mobile */
+@media (max-width: 880px) {
+  .stock-category-chips {
+    display: flex;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    gap: 0.4rem;
+    padding: 0.3rem 0;
+    scrollbar-width: none;
+  }
+  .stock-category-chips::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Name stat strip on stock page — make it scrollable on mobile */
+@media (max-width: 880px) {
+  .name-stat-strip {
+    display: flex !important;
+    overflow-x: auto;
+    flex-wrap: nowrap !important;
+    gap: 0.5rem;
+    padding: 0.3rem 0;
+    scrollbar-width: none;
+  }
+  .name-stat-strip::-webkit-scrollbar {
+    display: none;
+  }
+  .stat-chip {
+    flex: 0 0 auto !important;
+    min-width: 80px;
+  }
 }
