@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.1.3";
+const APP_VERSION = "3.1.4";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -7758,13 +7758,13 @@ function openBulkStockAdd() {
         <datalist id="bulkSupList">${supplierOptions}</datalist>
       </div>
       <div class="field full-width">
-        <label>What code will you scan? <span class="required">*</span></label>
+        <label>What code will you scan?</label>
         <div class="seg-control" id="bulkCodeType">
-          <button type="button" class="seg-btn active" data-type="imei">📡 IMEI (15-17 digit)</button>
-          <button type="button" class="seg-btn" data-type="iccid">📶 SIM NO / ICCID (89… 20-digit)</button>
-          <button type="button" class="seg-btn" data-type="any">🌀 Any code</button>
+          <button type="button" class="seg-btn active" data-type="any">🌀 Any code</button>
+          <button type="button" class="seg-btn" data-type="imei">📡 IMEI only</button>
+          <button type="button" class="seg-btn" data-type="iccid">📶 SIM NO only</button>
         </div>
-        <p class="hint" id="codeTypeHint">IMEI mode: scanner sirf 14-17 digit numbers accept karega. IMSI / SIM NO / QR ignore honge.</p>
+        <p class="hint" id="codeTypeHint">Any mode: koi bhi barcode/QR accept hoga. Filter chahiye to specific mode pick karo.</p>
       </div>
     </div>
     <div class="modal-actions">
@@ -7775,13 +7775,13 @@ function openBulkStockAdd() {
   modalOverlay.classList.remove("hidden");
 
   // Code-type segmented control wiring
-  let _codeType = "imei";
+  let _codeType = "any";
   const seg = document.getElementById("bulkCodeType");
   const hint = document.getElementById("codeTypeHint");
   const hints = {
+    any: "Any mode: koi bhi barcode/QR accept hoga. Filter chahiye to specific mode pick karo.",
     imei: "IMEI mode: scanner sirf 14-17 digit numbers accept karega. IMSI / SIM NO / QR ignore honge.",
     iccid: "SIM NO mode: scanner sirf 89... se start hone wale 18-22 digit ICCIDs accept karega. IMSI / QR ignore.",
-    any: "Any mode: koi bhi code accept hoga (Code 128, QR, Data Matrix etc.)",
   };
   seg?.querySelectorAll(".seg-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -7873,10 +7873,15 @@ function openBulkScanModal() {
   modal.innerHTML = `
     <h3>📷 Scan Items — ${escapeHtml(_bulkScanState.meta.name)}</h3>
     <p class="modal-desc">
-      Looking for: <strong>${typeInfo.icon} ${escapeHtml(typeInfo.label)}</strong>
+      Looking for: <strong id="scanModeBadge">${typeInfo.icon} ${escapeHtml(typeInfo.label)}</strong>
       <span style="color:#94a3b8;">(${escapeHtml(typeInfo.desc)})</span>
-      — wrong codes ignored automatically.
     </p>
+
+    <div class="seg-control" id="scanModeSwitcher" style="margin-bottom: 0.7rem;">
+      <button type="button" class="seg-btn ${codeType === 'any' ? 'active' : ''}" data-type="any">🌀 Any</button>
+      <button type="button" class="seg-btn ${codeType === 'imei' ? 'active' : ''}" data-type="imei">📡 IMEI</button>
+      <button type="button" class="seg-btn ${codeType === 'iccid' ? 'active' : ''}" data-type="iccid">📶 SIM NO</button>
+    </div>
 
     <div class="bulk-scan-stats">
       <span class="bulk-stat-label">Scanned</span>
@@ -8001,7 +8006,8 @@ function openBulkScanModal() {
       lastRejectedTime = now;
       playBeep(280, 0.18); // low buzz = rejected
       try { navigator.vibrate && navigator.vibrate([60, 80, 60]); } catch {}
-      setStatus(`✗ ${validation.reason}`);
+      const shortV = v.length > 12 ? v.slice(0, 6) + "…" + v.slice(-6) : v;
+      setStatus(`✗ Detected "${shortV}" — ${validation.reason}. Tap "Any code" mode if needed.`);
       flashScanReject();
       return;
     }
@@ -8085,6 +8091,26 @@ function openBulkScanModal() {
 
   _bulkScanState.active = true;
 
+  // In-scanner mode switcher — user can change filter on the fly
+  document.querySelectorAll("#scanModeSwitcher .seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const newType = btn.dataset.type;
+      _bulkScanState.meta.codeType = newType;
+      document.querySelectorAll("#scanModeSwitcher .seg-btn").forEach((b) => {
+        b.classList.toggle("active", b.dataset.type === newType);
+      });
+      const labels = {
+        imei:  { label: "IMEI", desc: "14-17 digit", icon: "📡" },
+        iccid: { label: "SIM NO", desc: "89… 20-digit", icon: "📶" },
+        any:   { label: "Any", desc: "any code", icon: "🌀" },
+      };
+      const info = labels[newType];
+      const badge = document.getElementById("scanModeBadge");
+      if (badge) badge.textContent = `${info.icon} ${info.label}`;
+      setStatus(`Mode: ${info.icon} ${info.label} — ${info.desc}`);
+    });
+  });
+
   // ----- Initialise scanner -----
   if (hasNativeDetector) {
     initNativeBulkScanner(addImei, setStatus, cleanup);
@@ -8093,151 +8119,123 @@ function openBulkScanModal() {
   }
 }
 
-// ===== NATIVE BarcodeDetector — way faster than JS libraries =====
+// ===== NATIVE BarcodeDetector — fast + fail-safe =====
 async function initNativeBulkScanner(addImei, setStatus, cleanup) {
   try {
-    const supportedFormats = await window.BarcodeDetector.getSupportedFormats();
-    // FAST MODE: only IMEI/serial-relevant formats (Code 128 is 90% of cases)
-    // Less formats = faster detection per frame (5-10× speedup)
-    const wantedFormats = ["code_128", "code_39", "data_matrix", "qr_code"];
-    const formats = supportedFormats.filter((f) => wantedFormats.includes(f));
-    const detector = new window.BarcodeDetector({ formats });
+    // Get all supported formats — no restriction, max compatibility
+    let formats = [];
+    try {
+      formats = await window.BarcodeDetector.getSupportedFormats();
+    } catch (e) {
+      console.warn("getSupportedFormats failed:", e);
+    }
+    // Create detector with no format restriction (defaults to all)
+    const detector = formats.length
+      ? new window.BarcodeDetector({ formats })
+      : new window.BarcodeDetector();
 
     const video = document.getElementById("bulkScanVideo");
-    if (!video) return;
+    if (!video) {
+      setStatus("Video element not found");
+      return;
+    }
 
-    setStatus("Selecting best back camera…");
+    setStatus("Requesting camera permission…");
 
-    // ----- Pick the BEST back camera explicitly -----
-    // Some phones have multiple back cameras (wide, ultra-wide, tele).
-    // We want the main wide-angle one for close-up barcode scanning.
-    let chosenDeviceId = null;
+    // SIMPLE constraints — just back camera, nothing fancy
+    // Complex constraints fail on many phones; we add advanced settings AFTER
+    let stream;
     try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const backCams = devices.filter(
-        (d) => d.kind === "videoinput" && /back|rear|environment|world/i.test(d.label || "")
-      );
-      if (backCams.length > 0) {
-        // Prefer the "main" back camera (not ultra-wide / telephoto if multiple)
-        // Usually the first listed back camera is the main one
-        const main = backCams.find((c) => !/ultra.?wide|tele|macro|depth/i.test(c.label || "")) || backCams[0];
-        chosenDeviceId = main.deviceId;
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+        audio: false,
+      });
+    } catch (err) {
+      console.error("getUserMedia failed with environment:", err);
+      // Fallback: try with no facing constraint at all
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
+      } catch (err2) {
+        console.error("getUserMedia failed completely:", err2);
+        setStatus("❌ Camera permission denied or unavailable");
+        return;
       }
-    } catch (e) {}
-
-    const videoConstraints = chosenDeviceId
-      ? {
-          deviceId: { exact: chosenDeviceId },
-          width: { ideal: 1920, min: 640 },
-          height: { ideal: 1080, min: 480 },
-          frameRate: { ideal: 30, min: 15 },
-          focusMode: "continuous",
-        }
-      : {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1920, min: 640 },
-          height: { ideal: 1080, min: 480 },
-          frameRate: { ideal: 30, min: 15 },
-          focusMode: "continuous",
-        };
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: videoConstraints,
-      audio: false,
-    });
+    }
 
     video.srcObject = stream;
     video.muted = true;
     video.setAttribute("playsinline", "");
-    await video.play();
+    try { await video.play(); } catch (e) { console.warn("video.play failed:", e); }
 
+    setStatus("📷 Scanner ready — point at barcode");
+
+    // Try to apply zoom + focus AFTER stream is working (safe, optional)
     const track = stream.getVideoTracks()[0];
-    const capabilities = track?.getCapabilities?.() || {};
+    if (track) {
+      try {
+        const capabilities = track.getCapabilities?.() || {};
+        const advanced = [];
+        if (capabilities.focusMode && capabilities.focusMode.includes("continuous")) {
+          advanced.push({ focusMode: "continuous" });
+        }
+        if (capabilities.zoom) {
+          const z = Math.min(Math.max(1.5, capabilities.zoom.min || 1), capabilities.zoom.max || 1);
+          advanced.push({ zoom: z });
+        }
+        if (advanced.length) await track.applyConstraints({ advanced }).catch(() => {});
 
-    // Apply best initial settings (zoom + continuous focus)
-    try {
-      const advanced = [];
-      if (capabilities.focusMode && capabilities.focusMode.includes("continuous")) {
-        advanced.push({ focusMode: "continuous" });
-      }
-      if (capabilities.zoom) {
-        // Slight zoom helps barcode detection (~1.5×)
-        const minZ = capabilities.zoom.min || 1;
-        const maxZ = capabilities.zoom.max || 1;
-        const targetZ = Math.min(Math.max(1.5, minZ), maxZ);
-        advanced.push({ zoom: targetZ });
-      }
-      if (advanced.length) await track.applyConstraints({ advanced });
-    } catch (e) {}
-
-    // ----- Torch button if supported -----
-    if (capabilities.torch) {
-      const torchBtn = document.getElementById("bulkTorchBtn");
-      if (torchBtn) {
-        torchBtn.style.display = "flex";
-        let torchOn = false;
-        torchBtn.addEventListener("click", async () => {
-          torchOn = !torchOn;
-          try {
-            await track.applyConstraints({ advanced: [{ torch: torchOn }] });
-            torchBtn.classList.toggle("active", torchOn);
-          } catch (e) {}
-        });
-      }
-    }
-
-    // ----- Tap-to-focus: tap anywhere in viewfinder to refocus -----
-    if (capabilities.focusMode && capabilities.focusMode.includes("manual") || capabilities.focusDistance) {
-      const wrap = document.querySelector(".bulk-scan-viewfinder");
-      if (wrap) {
-        wrap.addEventListener("click", async (e) => {
-          if (e.target.closest(".qr-controls")) return; // ignore torch button click
-          try {
-            // Trigger single-shot autofocus by toggling focus mode
-            await track.applyConstraints({ advanced: [{ focusMode: "single-shot" }] });
-            setTimeout(async () => {
+        // Torch button if supported
+        if (capabilities.torch) {
+          const torchBtn = document.getElementById("bulkTorchBtn");
+          if (torchBtn) {
+            torchBtn.style.display = "flex";
+            let torchOn = false;
+            torchBtn.addEventListener("click", async () => {
+              torchOn = !torchOn;
               try {
-                await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
+                await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+                torchBtn.classList.toggle("active", torchOn);
               } catch (e) {}
-            }, 300);
-            const tap = document.createElement("div");
-            tap.className = "tap-focus-ring";
-            tap.style.left = (e.offsetX - 30) + "px";
-            tap.style.top = (e.offsetY - 30) + "px";
-            wrap.appendChild(tap);
-            setTimeout(() => tap.remove(), 600);
-          } catch (e) {}
-        });
+            });
+          }
+        }
+      } catch (e) {
+        console.warn("Advanced camera settings failed (non-fatal):", e);
       }
     }
 
-    setStatus("⚡ Fast scan ready — bring barcode close (Code 128 / QR)");
-
-    // ----- Scan loop using requestAnimationFrame for 60fps -----
-    let frame = 0;
+    // ----- Scan loop -----
+    let scanErrCount = 0;
     const scanLoop = async () => {
       if (!_bulkScanState.active) return;
-      frame++;
       try {
-        if (video.readyState >= 2) {
+        if (video.readyState >= 2 && video.videoWidth > 0) {
           const barcodes = await detector.detect(video);
           if (barcodes && barcodes.length > 0) {
-            // Multi-barcode: add all unique ones detected in this frame
             for (const bc of barcodes) {
               const value = (bc.rawValue || "").trim();
               if (value) addImei(value);
             }
           }
         }
+        scanErrCount = 0;
       } catch (e) {
-        // silently retry next frame — common for partial-occluded barcodes
+        scanErrCount++;
+        if (scanErrCount === 1) console.warn("Detector error (will retry):", e);
+        if (scanErrCount > 30) {
+          setStatus("Scanner having trouble — try manual entry below");
+          return; // stop the loop
+        }
       }
       requestAnimationFrame(scanLoop);
     };
     scanLoop();
   } catch (err) {
-    console.error("Native scanner failed:", err);
-    setStatus("Camera unavailable — type manually below.");
+    console.error("Native scanner setup failed:", err);
+    setStatus("❌ Camera unavailable — type manually below");
   }
 }
 
