@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.2.2";
+const APP_VERSION = "3.2.3";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -7505,7 +7505,6 @@ function renderAccountsPage() {
             <div class="acc-hero-amount">${escapeHtml(formatINR(balance))}</div>
             <div class="acc-hero-sub">As of today</div>
           </div>
-          <div class="acc-hero-divider"></div>
           <div class="acc-hero-side acc-hero-projected ${projectedBalance < 0 ? "acc-projected-neg" : ""}">
             <div class="acc-hero-label">After Upcoming</div>
             <div class="acc-hero-amount">${escapeHtml(formatINR(projectedBalance))}</div>
