@@ -164,6 +164,7 @@ async function updateInstallation(inst) {
       secondary_sim: inst.secondarySim || null,
       imei_history: inst.imeiHistory,
       sim_history: inst.simHistory,
+      tasks: inst.tasks || {},  // ← CRITICAL: install-level task completions (Portal / Vehicle no)
     })
     .eq("id", inst.id)
     .select()
