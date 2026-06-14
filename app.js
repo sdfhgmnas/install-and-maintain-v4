@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.1.4";
+const APP_VERSION = "3.2.0";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -1997,7 +1997,7 @@ function historyList(items) {
 function simHistoryCell(inst) {
   let html = historyList(inst.simHistory);
   if (inst.secondarySim) {
-    html += `<div class="history-item secondary-sim"><span class="badge badge-secondary">2nd SIM</span> <span class="mono">${escapeHtml(inst.secondarySim)}</span></div>`;
+    html += `<div class="history-item secondary-sim"><span class="badge badge-secondary">Secondary No</span> <span class="mono">${escapeHtml(inst.secondarySim)}</span></div>`;
   }
   return html;
 }
@@ -3753,7 +3753,7 @@ function openEditInstallation(id) {
       <div class="field"><label for="editModel">GPS Model</label><input type="text" id="editModel" value="${escapeHtml(inst.gpsModel)}" autocomplete="off" /></div>
       <div class="field"><label for="editMac">MAC ID</label><input type="text" id="editMac" value="${escapeHtml(inst.macId)}" autocomplete="off" /></div>
       <div class="field"><label for="editSensor">Sensor No</label><input type="text" id="editSensor" value="${escapeHtml(inst.sensorNo)}" autocomplete="off" /></div>
-      <div class="field full-width"><label for="editSecondarySim">Secondary SIM No <span class="field-tag">admin only</span></label><input type="text" id="editSecondarySim" value="${escapeHtml(inst.secondarySim || "")}" placeholder="Optional backup / 2nd SIM" autocomplete="off" inputmode="numeric" /></div>
+      <div class="field full-width"><label for="editSecondarySim">Secondary No <span class="field-tag">admin only</span></label><input type="text" id="editSecondarySim" value="${escapeHtml(inst.secondarySim || "")}" placeholder="Optional backup / Secondary No" autocomplete="off" inputmode="numeric" /></div>
     </div>
     <div class="modal-actions">
       <button type="button" class="btn btn-secondary modal-close">Cancel</button>
@@ -4892,7 +4892,7 @@ function renderInstallationsPage() {
       <div class="summary-grid">
         <div class="summary-box summary-info"><strong>${allInstalls.length}</strong><span>Total installs</span></div>
         <div class="summary-box summary-ok"><strong>${recentInstalls}</strong><span>This week</span></div>
-        <div class="summary-box summary-purple"><strong>${withSecSim}</strong><span>With 2nd SIM</span></div>
+        <div class="summary-box summary-purple"><strong>${withSecSim}</strong><span>With Secondary No</span></div>
       </div>
       <section class="card">
         <div class="section-heading">
@@ -5010,7 +5010,7 @@ function renderInstallationsPage() {
                           ${i.secondarySim ? `
                             <div class="tk-stat tk-stat-full">
                               <span class="tk-stat-icon">📡</span>
-                              <span class="tk-stat-label">2nd SIM:</span>
+                              <span class="tk-stat-label">Secondary No:</span>
                               <span class="tk-stat-value">${escapeHtml(i.secondarySim)}</span>
                             </div>
                           ` : ""}
@@ -5143,7 +5143,7 @@ function renderRepairsPage() {
             <input class="hidden" type="file" id="bulkUpload" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
           </div>
         </div>
-        <div class="table-wrap">
+        <div class="table-wrap repairs-table-desktop">
           <table>
             <thead><tr><th>Date</th><th>Vehicle</th><th>IMEI</th><th>Work Done</th><th>Status</th></tr></thead>
             <tbody>
@@ -5165,6 +5165,52 @@ function renderRepairsPage() {
               }
             </tbody>
           </table>
+        </div>
+        <!-- Mobile card grid -->
+        <div class="repairs-card-grid">
+          ${filtered.length
+            ? filtered.map((m) => {
+                const tail = (s, n = 6) => {
+                  const v = String(s || "");
+                  return v.length > n ? "…" + v.slice(-n) : v || "—";
+                };
+                return `
+                  <article class="tk-card">
+                    <div class="tk-card-head">
+                      <span class="tk-pill tk-pill-repair">${escapeHtml(m.vehicleNo)}</span>
+                      <span class="tk-chip tk-chip-repair">🛠 Repair</span>
+                    </div>
+                    <div class="tk-stats">
+                      <div class="tk-stat tk-stat-full">
+                        <span class="tk-stat-icon">🔧</span>
+                        <span class="tk-stat-label">Work:</span>
+                        <span class="tk-stat-value" style="white-space:normal;">${escapeHtml(workLabels(m))}</span>
+                      </div>
+                      ${m.imei ? `
+                        <div class="tk-stat tk-stat-full">
+                          <span class="tk-stat-icon">📡</span>
+                          <span class="tk-stat-label">IMEI:</span>
+                          <span class="tk-stat-value">${escapeHtml(tail(m.imei))}</span>
+                        </div>
+                      ` : ""}
+                    </div>
+                    <div class="tk-footer">
+                      <div class="tk-footer-row">
+                        <span class="tk-footer-icon">📅</span>
+                        <span class="tk-footer-label">Reported:</span>
+                        <span class="tk-footer-value">${escapeHtml(formatDateTime(m.createdAt))}</span>
+                      </div>
+                      <div class="tk-footer-row">
+                        <span class="tk-footer-icon">📊</span>
+                        <span class="tk-footer-label">Status:</span>
+                        <span class="tk-footer-value">${getMaintenanceStatus(m)}</span>
+                      </div>
+                    </div>
+                  </article>
+                `;
+              }).join("")
+            : `<div class="entry-empty"><div class="entry-empty-icon">🛠️</div><h3>No repairs found</h3><p>Try a different search.</p></div>`
+          }
         </div>
       </section>
     </main>
@@ -5265,7 +5311,7 @@ function renderSimUpload() {
   const missingSec = allInstalls.filter((i) => !i.secondarySim).length;
 
   app.innerHTML = `
-    ${renderHeader("SIM Upload", "Add secondary SIM numbers")}
+    ${renderHeader("SIM Upload", "Add secondary No numbers")}
     <main class="main">
       ${renderAdminNav("sim-upload")}
       <div class="summary-grid">
@@ -5276,8 +5322,8 @@ function renderSimUpload() {
       <section class="card">
         <div class="section-heading">
           <div>
-            <h2>📋 Quick Paste — Secondary SIMs</h2>
-            <p class="section-subtitle">Excel skip karo. Primary SIMs ek box me paste karo, secondary SIMs doosre me — line-by-line pair ho jaayenge. 20-digit ICCIDs poore digits ke saath bachenge.</p>
+            <h2>📋 Quick Paste — Secondary Nos</h2>
+            <p class="section-subtitle">Excel skip karo. Primary SIMs ek box me paste karo, secondary Nos doosre me — line-by-line pair ho jaayenge. 20-digit ICCIDs poore digits ke saath bachenge.</p>
           </div>
         </div>
         <div class="paste-grid">
@@ -5286,7 +5332,7 @@ function renderSimUpload() {
             <textarea id="pastePrimary" rows="10" placeholder="5753200309565&#10;5753200309623&#10;5753200322950&#10;..." spellcheck="false"></textarea>
           </div>
           <div class="field">
-            <label for="pasteSecondary">Secondary SIM numbers (ICCIDs) <span class="paste-count" id="secondaryCount">0 lines</span></label>
+            <label for="pasteSecondary">Secondary Nos (ICCIDs) <span class="paste-count" id="secondaryCount">0 lines</span></label>
             <textarea id="pasteSecondary" rows="10" placeholder="89918720507069157022&#10;89918720507069156917&#10;89918720507069153161&#10;..." spellcheck="false"></textarea>
           </div>
         </div>
@@ -5638,16 +5684,67 @@ function renderSimDb() {
             <button type="button" class="btn btn-outline btn-sm" id="exportSimsBtn">↓ Export Excel</button>
           </div>
         </div>
-        <div class="list-tools admin-search">
+        <div class="list-tools admin-search sticky-search">
           <input type="search" id="simSearch" placeholder="Search primary, secondary, notes..." value="${escapeHtml(simDbQuery)}" />
         </div>
-        <div class="table-wrap">
+        <div class="table-wrap sims-table-desktop">
           <table>
             <thead>
               <tr><th>Primary</th><th>Secondary (ICCID)</th><th>Status</th><th>Notes</th><th>Added</th><th></th></tr>
             </thead>
             <tbody>${tableHtml}</tbody>
           </table>
+        </div>
+        <!-- Mobile card grid -->
+        <div class="sims-card-grid">
+          ${matches.length
+            ? matches.map((sim) => {
+                const status = simStatus(sim);
+                const isSwapped = simLooksSwapped(sim);
+                const displayPrimary = isSwapped ? sim.secondaryNumber : sim.primaryNumber;
+                const displaySecondary = isSwapped ? sim.primaryNumber : sim.secondaryNumber;
+                const tail = (s, n = 8) => {
+                  const v = String(s || "");
+                  return v.length > n ? "…" + v.slice(-n) : v || "—";
+                };
+                return `
+                  <article class="tk-card ${isSwapped ? "tk-card-warn" : ""}">
+                    <div class="tk-card-head">
+                      <span class="tk-pill">${escapeHtml(displayPrimary || "Pending primary")}</span>
+                      <span class="tk-chip sim-status-${status.className}">${escapeHtml(status.label)}</span>
+                    </div>
+                    <div class="tk-stats">
+                      <div class="tk-stat tk-stat-full">
+                        <span class="tk-stat-icon">📶</span>
+                        <span class="tk-stat-label">Secondary No:</span>
+                        <span class="tk-stat-value">${escapeHtml(tail(displaySecondary, 10))}</span>
+                      </div>
+                      ${sim.notes ? `
+                        <div class="tk-stat tk-stat-full">
+                          <span class="tk-stat-icon">📝</span>
+                          <span class="tk-stat-label">Notes:</span>
+                          <span class="tk-stat-value" style="white-space:normal;">${escapeHtml(sim.notes)}</span>
+                        </div>
+                      ` : ""}
+                    </div>
+                    ${isSwapped ? `<div class="tk-reason" style="background:#fef3c7;color:#92400e;border-color:#f59e0b;">⚠️ Stored swapped — auto-corrected display</div>` : ""}
+                    <div class="tk-footer">
+                      <div class="tk-footer-row">
+                        <span class="tk-footer-icon">📅</span>
+                        <span class="tk-footer-label">Added:</span>
+                        <span class="tk-footer-value">${escapeHtml(formatDateTime(sim.createdAt))}</span>
+                      </div>
+                    </div>
+                    <div class="tk-actions">
+                      ${isSwapped ? `<button type="button" class="btn btn-warn btn-sm sim-row-fix" data-id="${sim.id}">↔ Fix</button>` : ""}
+                      <button type="button" class="btn btn-outline btn-sm sim-row-edit" data-id="${sim.id}">✎ Edit</button>
+                      <button type="button" class="btn btn-danger btn-sm sim-row-delete" data-id="${sim.id}">🗑</button>
+                    </div>
+                  </article>
+                `;
+              }).join("")
+            : `<div class="entry-empty"><div class="entry-empty-icon">📶</div><h3>No SIMs found</h3><p>${q ? `Try a different search.` : `Use SIM Upload to bulk-add.`}</p></div>`
+          }
         </div>
       </section>
     </main>
@@ -6234,12 +6331,12 @@ function renderStockPage() {
             <button type="button" class="btn btn-primary btn-sm" id="addStockBtn">+ Add Item</button>
           </div>
         </div>
-        <div class="list-tools admin-search">
+        <div class="list-tools admin-search sticky-search">
           <input type="search" id="stockSearch" placeholder="Search anything — name, IMEI, SIM number, MAC, supplier..." value="${escapeHtml(stockQuery)}" />
         </div>
         ${liveCategories.length ? chipsHtml : ""}
         ${nameStripHtml}
-        <div class="table-wrap">
+        <div class="table-wrap stock-table-desktop">
           <table>
             <thead>
               <tr>
@@ -6255,6 +6352,72 @@ function renderStockPage() {
             </thead>
             <tbody>${tableHtml}</tbody>
           </table>
+        </div>
+        <!-- Mobile card grid -->
+        <div class="stock-card-grid">
+          ${filtered.length
+            ? filtered.map((item) => {
+                const low = isLow(item);
+                const metaSummary = stockMetadataSummary(item);
+                const tail = (s, n = 8) => {
+                  const v = String(s || "");
+                  return v.length > n ? "…" + v.slice(-n) : v || "—";
+                };
+                const imei = item.metadata?.imei || "";
+                return `
+                  <article class="tk-card ${low ? "tk-card-warn" : ""}">
+                    <div class="tk-card-head">
+                      <span class="tk-pill">${escapeHtml(item.name)}</span>
+                      <span class="tk-chip ${low ? "tk-chip-deleted" : "tk-chip-install"}" style="text-decoration:none;">
+                        ${fmtQty(item.quantity)} ${escapeHtml(item.unit)}${low ? " · LOW" : ""}
+                      </span>
+                    </div>
+                    <div class="tk-stats">
+                      ${item.category ? `
+                        <div class="tk-stat">
+                          <span class="tk-stat-icon">🏷️</span>
+                          <span class="tk-stat-label">Category:</span>
+                          <span class="tk-stat-value">${escapeHtml(item.category)}</span>
+                        </div>
+                      ` : ""}
+                      ${item.supplier ? `
+                        <div class="tk-stat">
+                          <span class="tk-stat-icon">🏭</span>
+                          <span class="tk-stat-label">Supplier:</span>
+                          <span class="tk-stat-value">${escapeHtml(item.supplier)}</span>
+                        </div>
+                      ` : ""}
+                      ${imei ? `
+                        <div class="tk-stat tk-stat-full">
+                          <span class="tk-stat-icon">📡</span>
+                          <span class="tk-stat-label">IMEI:</span>
+                          <span class="tk-stat-value">${escapeHtml(tail(imei, 10))}</span>
+                        </div>
+                      ` : ""}
+                      ${metaSummary && !imei ? `
+                        <div class="tk-stat tk-stat-full">
+                          <span class="tk-stat-icon">ℹ️</span>
+                          <span class="tk-stat-label">Meta:</span>
+                          <span class="tk-stat-value" style="white-space:normal;">${escapeHtml(metaSummary)}</span>
+                        </div>
+                      ` : ""}
+                    </div>
+                    <div class="tk-footer">
+                      <div class="tk-footer-row">
+                        <span class="tk-footer-icon">📅</span>
+                        <span class="tk-footer-label">Updated:</span>
+                        <span class="tk-footer-value">${escapeHtml(formatDateTime(item.updatedAt))}</span>
+                      </div>
+                    </div>
+                    <div class="tk-actions">
+                      <button type="button" class="btn btn-outline btn-sm stock-edit" data-id="${item.id}">✎ Edit</button>
+                      <button type="button" class="btn btn-danger btn-sm stock-delete" data-id="${item.id}">🗑</button>
+                    </div>
+                  </article>
+                `;
+              }).join("")
+            : `<div class="entry-empty"><div class="entry-empty-icon">📦</div><h3>No items found</h3><p>${q || stockCategoryFilter !== "all" ? "Try different filters." : "Tap + Add Item to start."}</p></div>`
+          }
         </div>
       </section>
     </main>
