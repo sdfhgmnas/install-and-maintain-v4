@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.2.0";
+const APP_VERSION = "3.2.1";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
