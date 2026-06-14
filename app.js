@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.2.1";
+const APP_VERSION = "3.2.2";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -7441,15 +7441,27 @@ function formatINR(n) {
 function calculateAccountsBalance(transactions) {
   let bal = 0;
   for (const tx of transactions) {
+    if (tx.isPlanned) continue; // planned items don't affect current balance
     if (tx.type === "opening" || tx.type === "credit") bal += tx.amount;
     else if (tx.type === "expense" || tx.type === "salary") bal -= tx.amount;
   }
   return bal;
 }
 
+function calculateUpcomingTotal(transactions) {
+  // Sum of all PLANNED expenses + salaries (these are future outflows)
+  let total = 0;
+  for (const tx of transactions) {
+    if (!tx.isPlanned) continue;
+    if (tx.type === "expense" || tx.type === "salary") total += tx.amount;
+  }
+  return total;
+}
+
 function accountsProjectSummary(transactions) {
   const summary = {};
   for (const tx of transactions) {
+    if (tx.isPlanned) continue; // planned not yet realized
     const proj = tx.projectName || "Uncategorized";
     if (!summary[proj]) summary[proj] = { credit: 0, expense: 0, salary: 0, net: 0 };
     if (tx.type === "credit") summary[proj].credit += tx.amount;
@@ -7464,23 +7476,44 @@ function accountsProjectSummary(transactions) {
 
 function renderAccountsPage() {
   const balance = calculateAccountsBalance(accountsTransactions);
+  const upcomingTotal = calculateUpcomingTotal(accountsTransactions);
+  const projectedBalance = balance - upcomingTotal;
   const summary = accountsProjectSummary(accountsTransactions);
   const projectKeys = Object.keys(summary).sort((a, b) => Math.abs(summary[b].net) - Math.abs(summary[a].net));
-  const recent = accountsTransactions.slice(0, 30);
 
-  const totalCredit = accountsTransactions.filter((t) => t.type === "credit" || t.type === "opening").reduce((s, t) => s + t.amount, 0);
-  const totalExpense = accountsTransactions.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
-  const totalSalary = accountsTransactions.filter((t) => t.type === "salary").reduce((s, t) => s + t.amount, 0);
+  // Split transactions: actual vs upcoming
+  const actualTxs = accountsTransactions.filter((t) => !t.isPlanned);
+  const upcomingTxs = accountsTransactions.filter((t) => t.isPlanned).sort((a, b) => {
+    return new Date(a.transactionDate || a.createdAt) - new Date(b.transactionDate || b.createdAt);
+  });
+  const recent = actualTxs.slice(0, 30);
+
+  const totalCredit = actualTxs.filter((t) => t.type === "credit" || t.type === "opening").reduce((s, t) => s + t.amount, 0);
+  const totalExpense = actualTxs.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+  const totalSalary = actualTxs.filter((t) => t.type === "salary").reduce((s, t) => s + t.amount, 0);
 
   app.innerHTML = `
     ${renderHeader("Accounts", "Money in, money out, project-wise")}
     <main class="main">
       ${renderAdminNav("accounts")}
 
-      <!-- Balance hero -->
+      <!-- Balance hero: two-column current vs projected -->
       <section class="card acc-hero ${balance < 0 ? "acc-hero-neg" : ""}">
-        <div class="acc-hero-label">Current Balance</div>
-        <div class="acc-hero-amount">${escapeHtml(formatINR(balance))}</div>
+        <div class="acc-hero-split">
+          <div class="acc-hero-side acc-hero-current">
+            <div class="acc-hero-label">Current Balance</div>
+            <div class="acc-hero-amount">${escapeHtml(formatINR(balance))}</div>
+            <div class="acc-hero-sub">As of today</div>
+          </div>
+          <div class="acc-hero-divider"></div>
+          <div class="acc-hero-side acc-hero-projected ${projectedBalance < 0 ? "acc-projected-neg" : ""}">
+            <div class="acc-hero-label">After Upcoming</div>
+            <div class="acc-hero-amount">${escapeHtml(formatINR(projectedBalance))}</div>
+            <div class="acc-hero-sub">
+              ${upcomingTotal > 0 ? `− ${escapeHtml(formatINR(upcomingTotal))} planned` : "No planned expenses"}
+            </div>
+          </div>
+        </div>
         <div class="acc-hero-stats">
           <div class="acc-hero-stat">
             <span class="acc-hero-stat-dot" style="background:#10b981;"></span>
@@ -7499,12 +7532,62 @@ function renderAccountsPage() {
           </div>
         </div>
         <div class="acc-actions">
-          <button type="button" class="btn btn-primary" id="addCreditBtn">＋ Add Credit</button>
-          <button type="button" class="btn btn-outline" id="addExpenseBtn">－ Add Expense</button>
-          <button type="button" class="btn btn-outline" id="addSalaryBtn">👤 Add Salary</button>
-          ${accountsTransactions.length === 0 ? `<button type="button" class="btn btn-secondary btn-sm" id="setOpeningBtn">Set Opening Balance</button>` : ""}
+          <button type="button" class="btn btn-primary" id="addCreditBtn">＋ Credit</button>
+          <button type="button" class="btn btn-outline" id="addExpenseBtn">－ Expense</button>
+          <button type="button" class="btn btn-outline" id="addSalaryBtn">👤 Salary</button>
+          <button type="button" class="btn btn-warn" id="addUpcomingBtn">⏳ Upcoming</button>
+          ${accountsTransactions.length === 0 ? `<button type="button" class="btn btn-secondary btn-sm" id="setOpeningBtn">Set Opening</button>` : ""}
         </div>
       </section>
+
+      <!-- Upcoming expenses section (only shown if there are any) -->
+      ${upcomingTxs.length > 0 ? `
+        <section class="card acc-upcoming-card">
+          <div class="section-heading">
+            <div>
+              <h2>⏳ Upcoming Expenses (${upcomingTxs.length})</h2>
+              <p class="section-subtitle">Planned outflows. Mark Paid when payment done → moves to actual expenses.</p>
+            </div>
+            <div class="acc-upcoming-total">
+              <span class="acc-upcoming-total-label">Total upcoming</span>
+              <strong>${escapeHtml(formatINR(upcomingTotal))}</strong>
+            </div>
+          </div>
+          <div class="acc-upcoming-list">
+            ${upcomingTxs.map((tx) => {
+              const dueDate = tx.transactionDate || tx.createdAt;
+              const dueDateObj = new Date(dueDate);
+              const today = new Date();
+              today.setHours(0,0,0,0);
+              const isDue = dueDateObj <= today;
+              const isSoon = !isDue && (dueDateObj - today) < 7 * 86400000;
+              const typeLabel = tx.type === "salary" ? "👤 Salary" : "－ Expense";
+              return `
+                <article class="acc-upcoming-item ${isDue ? "acc-upcoming-due" : isSoon ? "acc-upcoming-soon" : ""}">
+                  <div class="acc-upcoming-head">
+                    <span class="acc-upcoming-type">${typeLabel}</span>
+                    ${isDue ? `<span class="acc-upcoming-badge acc-badge-due">⚠️ Due</span>` : isSoon ? `<span class="acc-upcoming-badge acc-badge-soon">Soon</span>` : ""}
+                  </div>
+                  <div class="acc-upcoming-main">
+                    <div class="acc-upcoming-desc">
+                      <strong>${escapeHtml(tx.projectName || "Uncategorized")}</strong>
+                      ${tx.description ? `<span>${escapeHtml(tx.description)}</span>` : ""}
+                    </div>
+                    <div class="acc-upcoming-amount">${escapeHtml(formatINR(tx.amount))}</div>
+                  </div>
+                  <div class="acc-upcoming-foot">
+                    <span class="acc-upcoming-date">📅 ${escapeHtml(formatDateTime(dueDate))}</span>
+                    <div class="acc-upcoming-actions">
+                      <button type="button" class="btn btn-primary btn-sm acc-mark-paid" data-id="${tx.id}">✓ Mark Paid</button>
+                      <button type="button" class="btn btn-danger btn-sm acc-delete-tx" data-id="${tx.id}">🗑</button>
+                    </div>
+                  </div>
+                </article>
+              `;
+            }).join("")}
+          </div>
+        </section>
+      ` : ""}
 
       <!-- Project-wise summary -->
       <section class="card">
@@ -7647,6 +7730,7 @@ function renderAccountsPage() {
   document.getElementById("addCreditBtn")?.addEventListener("click", () => openAccountsTxModal("credit"));
   document.getElementById("addExpenseBtn")?.addEventListener("click", () => openAccountsTxModal("expense"));
   document.getElementById("addSalaryBtn")?.addEventListener("click", () => openAccountsTxModal("salary"));
+  document.getElementById("addUpcomingBtn")?.addEventListener("click", () => openAccountsUpcomingModal());
   document.getElementById("setOpeningBtn")?.addEventListener("click", () => openAccountsTxModal("opening"));
   document.querySelectorAll(".acc-delete-tx").forEach((btn) => {
     btn.addEventListener("click", (e) => {
@@ -7654,6 +7738,138 @@ function renderAccountsPage() {
       handleAccountsDeleteTx(id);
     });
   });
+  document.querySelectorAll(".acc-mark-paid").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      const id = e.currentTarget.dataset.id;
+      handleMarkUpcomingPaid(id);
+    });
+  });
+}
+
+async function handleMarkUpcomingPaid(id) {
+  const tx = accountsTransactions.find((t) => t.id === id);
+  if (!tx) return;
+  const ok = await showConfirm({
+    title: "Mark as Paid?",
+    message: `<strong>${escapeHtml(formatINR(tx.amount))}</strong> — ${escapeHtml(tx.projectName || "Uncategorized")}<br><br>This will move it from upcoming to actual expenses with today's date.`,
+    confirmLabel: "✓ Yes, Mark Paid",
+  });
+  if (!ok) return;
+  const todayISO = new Date().toISOString().slice(0, 10);
+  try {
+    await updateAccountsTransaction(id, {
+      isPlanned: false,
+      transactionDate: todayISO,
+    });
+    // Update local state too
+    tx.isPlanned = false;
+    tx.transactionDate = todayISO;
+    render();
+    showToast("Marked as paid — added to expenses.");
+  } catch (err) {
+    showToast(err.message || "Failed to mark paid.", true);
+    await refreshAllData();
+    render();
+  }
+}
+
+function openAccountsUpcomingModal() {
+  // Default to ~30 days in future
+  const future = new Date();
+  future.setDate(future.getDate() + 30);
+  const futureISO = future.toISOString().slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
+
+  const allProjects = [...new Set(accountsTransactions.map((t) => t.projectName).filter(Boolean))];
+  const projectOptions = allProjects.map((p) => `<option value="${escapeHtml(p)}"></option>`).join("");
+
+  modal.innerHTML = `
+    <h3>⏳ Add Upcoming Expense</h3>
+    <p class="modal-desc">Planned future outflow. Won't affect current balance until you mark it paid.</p>
+
+    <div class="form-grid">
+      <div class="field full-width">
+        <label>Type</label>
+        <div class="seg-control" id="upcomingTypeSeg">
+          <button type="button" class="seg-btn active" data-type="expense">－ Expense</button>
+          <button type="button" class="seg-btn" data-type="salary">👤 Salary</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="upcAmount">Amount (₹) <span class="required">*</span></label>
+        <input type="number" id="upcAmount" min="0" step="0.01" placeholder="0.00" inputmode="decimal" autocomplete="off" autofocus />
+      </div>
+      <div class="field">
+        <label for="upcDueDate">Expected Date <span class="required">*</span></label>
+        <input type="date" id="upcDueDate" value="${futureISO}" min="${today}" />
+      </div>
+      <div class="field full-width">
+        <label for="upcProject">Project / Description</label>
+        <input type="text" id="upcProject" list="upcProjectList" placeholder="e.g. Q3 Office rent, Salary - Ramesh" autocomplete="off" />
+        <datalist id="upcProjectList">${projectOptions}</datalist>
+      </div>
+      <div class="field full-width">
+        <label for="upcDesc">Notes (optional)</label>
+        <textarea id="upcDesc" rows="2" placeholder="Any additional context..."></textarea>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
+      <button type="button" class="btn btn-warn" data-act="save">⏳ Add to Upcoming</button>
+    </div>
+  `;
+  modalOverlay.classList.remove("hidden");
+
+  // Type toggle
+  let _upcType = "expense";
+  document.querySelectorAll("#upcomingTypeSeg .seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      _upcType = btn.dataset.type;
+      document.querySelectorAll("#upcomingTypeSeg .seg-btn").forEach((b) => {
+        b.classList.toggle("active", b.dataset.type === _upcType);
+      });
+    });
+  });
+
+  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+  modal.querySelector('[data-act="save"]').onclick = async () => {
+    const amount = parseFloat(document.getElementById("upcAmount").value);
+    const dueDate = document.getElementById("upcDueDate").value;
+    const projectName = document.getElementById("upcProject").value.trim();
+    const description = document.getElementById("upcDesc").value.trim();
+    if (!amount || amount <= 0) {
+      showToast("Please enter a valid amount.", true);
+      return;
+    }
+    if (!dueDate) {
+      showToast("Please pick an expected date.", true);
+      return;
+    }
+    try {
+      const tx = {
+        id: crypto.randomUUID(),
+        type: _upcType,
+        amount,
+        projectName: projectName || "Uncategorized",
+        description,
+        transactionDate: dueDate,
+        isPlanned: true,
+        createdBy: currentUser || "admin",
+      };
+      const saved = await insertAccountsTransaction(tx);
+      accountsTransactions.unshift({
+        ...tx,
+        ...saved,
+        isPlanned: true,
+      });
+      closeModal();
+      render();
+      showToast("Upcoming expense added.");
+    } catch (err) {
+      showToast(err.message || "Failed to add.", true);
+    }
+  };
 }
 
 function openAccountsTxModal(type) {
