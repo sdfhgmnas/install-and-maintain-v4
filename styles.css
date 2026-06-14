@@ -7493,10 +7493,13 @@ button.clickable-card:focus-visible {
   margin-bottom: 1rem;
 }
 
-/* LEFT side: stays on green gradient (parent's color), white text */
+/* LEFT side: white inset card, green text — same style as right side */
 .acc-hero-side.acc-hero-current {
+  background: white;
+  border-radius: 14px;
+  padding: 0.85rem 0.7rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(255, 255, 255, 0.5);
   text-align: center;
-  padding: 0.6rem 0.4rem;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -7507,9 +7510,8 @@ button.clickable-card:focus-visible {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   font-weight: 700;
-  color: rgba(255, 255, 255, 0.95);
-  margin-bottom: 0.35rem;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  color: #047857;
+  margin-bottom: 0.3rem;
 }
 
 .acc-hero-current .acc-hero-amount {
@@ -7517,16 +7519,23 @@ button.clickable-card:focus-visible {
   font-weight: 800;
   font-family: var(--font-mono);
   line-height: 1.15;
-  color: white;
+  color: #10b981;
   margin: 0;
-  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.18);
 }
 
 .acc-hero-current .acc-hero-sub {
   font-size: 0.72rem;
-  color: rgba(255, 255, 255, 0.88);
+  color: #64748b;
   margin-top: 0.3rem;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  font-weight: 500;
+}
+
+/* If current balance goes negative, red theme */
+.acc-hero.acc-hero-neg .acc-hero-current .acc-hero-label {
+  color: #b91c1c;
+}
+.acc-hero.acc-hero-neg .acc-hero-current .acc-hero-amount {
+  color: #dc2626;
 }
 
 /* RIGHT side: white inset card, green text */
