@@ -876,6 +876,7 @@ async function fetchAccountsTransactions() {
     projectName: row.project_name || "",
     description: row.description || "",
     transactionDate: row.transaction_date,
+    isPlanned: !!row.is_planned,
     createdAt: row.created_at,
     createdBy: row.created_by,
   }));
@@ -890,6 +891,7 @@ async function insertAccountsTransaction(tx) {
     project_name: tx.projectName || null,
     description: tx.description || null,
     transaction_date: tx.transactionDate || new Date().toISOString().slice(0, 10),
+    is_planned: !!tx.isPlanned,
     created_by: tx.createdBy || null,
   };
   const { data, error } = await getDb()
@@ -906,6 +908,7 @@ async function insertAccountsTransaction(tx) {
     projectName: data.project_name || "",
     description: data.description || "",
     transactionDate: data.transaction_date,
+    isPlanned: !!data.is_planned,
     createdAt: data.created_at,
     createdBy: data.created_by,
   };
@@ -919,6 +922,7 @@ async function updateAccountsTransaction(id, patch) {
   if ("projectName" in patch) row.project_name = patch.projectName || null;
   if ("description" in patch) row.description = patch.description;
   if ("transactionDate" in patch) row.transaction_date = patch.transactionDate;
+  if ("isPlanned" in patch) row.is_planned = !!patch.isPlanned;
   const { data, error } = await getDb()
     .from("accounts_transactions")
     .update(row)
