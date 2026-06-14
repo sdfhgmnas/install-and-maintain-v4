@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.1.0";
+const APP_VERSION = "3.1.3";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -7741,7 +7741,7 @@ function openBulkStockAdd() {
 
   modal.innerHTML = `
     <h3>📦 Add Stock Items — Step 1 of 2</h3>
-    <p class="modal-desc">Enter item details. Next step, you'll scan each unit's IMEI/serial.</p>
+    <p class="modal-desc">Enter item details + what kind of code each unit has.</p>
     <div class="form-grid">
       <div class="field full-width">
         <label for="bulkItemName">Item Name <span class="required">*</span></label>
@@ -7757,6 +7757,15 @@ function openBulkStockAdd() {
         <input type="text" id="bulkItemSupplier" list="bulkSupList" placeholder="Supplier name" autocomplete="off" />
         <datalist id="bulkSupList">${supplierOptions}</datalist>
       </div>
+      <div class="field full-width">
+        <label>What code will you scan? <span class="required">*</span></label>
+        <div class="seg-control" id="bulkCodeType">
+          <button type="button" class="seg-btn active" data-type="imei">📡 IMEI (15-17 digit)</button>
+          <button type="button" class="seg-btn" data-type="iccid">📶 SIM NO / ICCID (89… 20-digit)</button>
+          <button type="button" class="seg-btn" data-type="any">🌀 Any code</button>
+        </div>
+        <p class="hint" id="codeTypeHint">IMEI mode: scanner sirf 14-17 digit numbers accept karega. IMSI / SIM NO / QR ignore honge.</p>
+      </div>
     </div>
     <div class="modal-actions">
       <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
@@ -7764,6 +7773,36 @@ function openBulkStockAdd() {
     </div>
   `;
   modalOverlay.classList.remove("hidden");
+
+  // Code-type segmented control wiring
+  let _codeType = "imei";
+  const seg = document.getElementById("bulkCodeType");
+  const hint = document.getElementById("codeTypeHint");
+  const hints = {
+    imei: "IMEI mode: scanner sirf 14-17 digit numbers accept karega. IMSI / SIM NO / QR ignore honge.",
+    iccid: "SIM NO mode: scanner sirf 89... se start hone wale 18-22 digit ICCIDs accept karega. IMSI / QR ignore.",
+    any: "Any mode: koi bhi code accept hoga (Code 128, QR, Data Matrix etc.)",
+  };
+  seg?.querySelectorAll(".seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      _codeType = btn.dataset.type;
+      seg.querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.type === _codeType));
+      if (hint) hint.textContent = hints[_codeType];
+    });
+  });
+
+  // Auto-detect from category typing
+  document.getElementById("bulkItemCategory")?.addEventListener("input", (e) => {
+    const v = (e.target.value || "").toLowerCase();
+    let detected = null;
+    if (/sim|iccid/.test(v)) detected = "iccid";
+    else if (/gps|imei|device|tracker/.test(v)) detected = "imei";
+    if (detected && detected !== _codeType) {
+      _codeType = detected;
+      seg?.querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.type === detected));
+      if (hint) hint.textContent = hints[detected];
+    }
+  });
 
   modal.querySelector('[data-act="cancel"]').onclick = closeModal;
   modal.querySelector('[data-act="continue"]').onclick = () => {
@@ -7776,7 +7815,7 @@ function openBulkStockAdd() {
     }
     _bulkScanState = {
       active: true,
-      meta: { name, category, supplier },
+      meta: { name, category, supplier, codeType: _codeType },
       scanned: [],
       scanner: null,
     };
@@ -7784,35 +7823,78 @@ function openBulkStockAdd() {
   };
 }
 
+// ----- Audio + visual feedback helpers (v3.1.1) -----
+let _audioCtx = null;
+function playBeep(frequency = 880, duration = 0.08) {
+  try {
+    if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = _audioCtx.createOscillator();
+    const gain = _audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(_audioCtx.destination);
+    osc.frequency.value = frequency;
+    osc.type = "sine";
+    gain.gain.setValueAtTime(0.25, _audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, _audioCtx.currentTime + duration);
+    osc.start(_audioCtx.currentTime);
+    osc.stop(_audioCtx.currentTime + duration);
+  } catch (e) {}
+}
+
+function flashScanSuccess() {
+  const v = document.querySelector(".bulk-scan-viewfinder");
+  if (v) {
+    v.classList.add("scan-flash-success");
+    setTimeout(() => v.classList.remove("scan-flash-success"), 280);
+  }
+}
+
+function flashScanReject() {
+  const v = document.querySelector(".bulk-scan-viewfinder");
+  if (v) {
+    v.classList.add("scan-flash-reject");
+    setTimeout(() => v.classList.remove("scan-flash-reject"), 280);
+  }
+}
+
 function openBulkScanModal() {
-  const HQR = window.Html5Qrcode;
-  const libraryReady = typeof HQR !== "undefined";
-  const cameraReady = libraryReady && window.isSecureContext;
+  const hasNativeDetector =
+    typeof window.BarcodeDetector !== "undefined" &&
+    window.isSecureContext;
+
+  const codeType = _bulkScanState.meta?.codeType || "any";
+  const typeLabels = {
+    imei:  { label: "IMEI", desc: "14-17 digit device serial", icon: "📡" },
+    iccid: { label: "SIM NO", desc: "89… 20-digit ICCID", icon: "📶" },
+    any:   { label: "Any", desc: "any code", icon: "🌀" },
+  };
+  const typeInfo = typeLabels[codeType] || typeLabels.any;
 
   modal.innerHTML = `
     <h3>📷 Scan Items — ${escapeHtml(_bulkScanState.meta.name)}</h3>
-    <p class="modal-desc">Scan each unit's IMEI / serial. Tap <strong>＋ Scan Another</strong> after each. Done karke <strong>Save All</strong>.</p>
+    <p class="modal-desc">
+      Looking for: <strong>${typeInfo.icon} ${escapeHtml(typeInfo.label)}</strong>
+      <span style="color:#94a3b8;">(${escapeHtml(typeInfo.desc)})</span>
+      — wrong codes ignored automatically.
+    </p>
 
     <div class="bulk-scan-stats">
-      <span class="bulk-stat-label">Items Scanned</span>
+      <span class="bulk-stat-label">Scanned</span>
       <span class="bulk-stat-num" id="bulkScanCount">0</span>
     </div>
 
-    ${cameraReady ? `
-      <div class="qr-reader-wrap bulk-scan-viewfinder">
-        <div id="qrReader"></div>
-        <div class="qr-status" id="qrStatus">Starting back camera…</div>
+    <div class="qr-reader-wrap bulk-scan-viewfinder">
+      <video id="bulkScanVideo" autoplay playsinline muted></video>
+      <div class="qr-scan-line"></div>
+      <div class="qr-controls">
+        <button type="button" class="qr-icon-btn" id="bulkTorchBtn" style="display:none;" aria-label="Torch">🔦</button>
       </div>
-    ` : `
-      <div class="hint hint-warn" style="margin-bottom: 0.7rem;">
-        📷 Camera unavailable — type IMEIs manually below.
-      </div>
-    `}
+      <div class="qr-status" id="qrStatus">Initialising camera…</div>
+    </div>
 
-    <div class="manual-entry-block">
-      <label for="bulkManualImei">Or type manually:</label>
-      <div class="input-with-scan" style="margin-top: 0.4rem;">
-        <input type="text" id="bulkManualImei" placeholder="Type IMEI / serial" inputmode="numeric" autocomplete="off" />
+    <div class="manual-entry-block" style="margin-top: 0.7rem;">
+      <div class="input-with-scan">
+        <input type="text" id="bulkManualImei" placeholder="Or type ${escapeHtml(typeInfo.label)} manually" inputmode="numeric" autocomplete="off" />
         <button type="button" class="btn btn-primary btn-sm" id="bulkManualAdd">+ Add</button>
       </div>
     </div>
@@ -7832,11 +7914,18 @@ function openBulkScanModal() {
   modal.classList.add("modal-wide");
   modalOverlay.classList.remove("hidden");
 
+  const setStatus = (t) => {
+    const s = document.getElementById("qrStatus");
+    if (s) s.textContent = t;
+  };
+
   const updateUI = () => {
     const list = document.getElementById("bulkScannedList");
     const count = _bulkScanState.scanned.length;
-    document.getElementById("bulkScanCount").textContent = count;
-    document.getElementById("bulkListCount").textContent = `(${count})`;
+    const countEl = document.getElementById("bulkScanCount");
+    if (countEl) countEl.textContent = count;
+    const lc = document.getElementById("bulkListCount");
+    if (lc) lc.textContent = `(${count})`;
     const saveBtn = document.getElementById("bulkSaveAll");
     if (saveBtn) {
       saveBtn.disabled = count === 0;
@@ -7862,29 +7951,96 @@ function openBulkScanModal() {
         updateUI();
       });
     });
+    // Auto-scroll list to bottom to show newest
+    list.scrollTop = list.scrollHeight;
+  };
+
+  let lastScannedCode = null;
+  let lastScanTime = 0;
+  let lastRejectedCode = null;
+  let lastRejectedTime = 0;
+
+  // Validates the scanned string against the chosen code type
+  const validateCode = (raw) => {
+    const v = String(raw || "").trim();
+    if (!v) return { ok: false, reason: "" };
+    const digits = v.replace(/\D/g, "");
+    const type = (_bulkScanState.meta && _bulkScanState.meta.codeType) || "any";
+
+    if (type === "iccid") {
+      // SIM NO / ICCID: 18-22 digits starting with 89
+      if (!/^89\d{16,20}$/.test(digits)) {
+        if (/^4\d{13,14}$/.test(digits)) return { ok: false, reason: "IMSI detected — looking for SIM NO (89…)" };
+        return { ok: false, reason: "Not a SIM NO (need 89… 20 digits)" };
+      }
+      return { ok: true, value: digits };
+    }
+
+    if (type === "imei") {
+      // IMEI: 14-17 digits, NOT starting with 89 (that would be ICCID)
+      if (/^89\d/.test(digits)) return { ok: false, reason: "Looks like SIM NO — looking for IMEI" };
+      if (!/^\d{14,17}$/.test(digits)) return { ok: false, reason: "Not an IMEI (need 14-17 digits)" };
+      return { ok: true, value: digits };
+    }
+
+    // 'any' mode — accept as-is
+    return { ok: true, value: v };
   };
 
   const addImei = (raw) => {
     const v = String(raw || "").trim();
     if (!v) return;
-    if (_bulkScanState.scanned.includes(v)) {
-      showToast("Already scanned!", true);
-      // Brief haptic via shake — just visual via toast
+    const now = Date.now();
+
+    // Format validation — reject wrong-type codes (e.g. IMSI when looking for ICCID)
+    const validation = validateCode(v);
+    if (!validation.ok) {
+      // Throttle rejection feedback (max 1 per 1.5s for same code)
+      if (v === lastRejectedCode && (now - lastRejectedTime) < 1500) return;
+      lastRejectedCode = v;
+      lastRejectedTime = now;
+      playBeep(280, 0.18); // low buzz = rejected
+      try { navigator.vibrate && navigator.vibrate([60, 80, 60]); } catch {}
+      setStatus(`✗ ${validation.reason}`);
+      flashScanReject();
       return;
     }
-    _bulkScanState.scanned.push(v);
-    updateUI();
-    // Brief visual feedback
-    const count = document.getElementById("bulkScanCount");
-    if (count) {
-      count.style.transform = "scale(1.3)";
-      setTimeout(() => { count.style.transform = ""; }, 200);
+
+    const value = validation.value;
+
+    // Same code within 1s = ignore (prevents accidental double-scan)
+    if (value === lastScannedCode && (now - lastScanTime) < 1000) return;
+    lastScannedCode = value;
+    lastScanTime = now;
+    if (_bulkScanState.scanned.includes(value)) {
+      playBeep(400, 0.12);
+      setStatus(`⚠️ ${value.slice(-6)} already scanned`);
+      try { navigator.vibrate && navigator.vibrate([30, 50, 30]); } catch {}
+      return;
     }
-    // Vibration if supported
-    try { navigator.vibrate && navigator.vibrate(50); } catch {}
+    _bulkScanState.scanned.push(value);
+    updateUI();
+    playBeep(880, 0.08); // high beep = success
+    flashScanSuccess();
+    try { navigator.vibrate && navigator.vibrate(60); } catch {}
+    setStatus(`✓ Added (${_bulkScanState.scanned.length}). Next item…`);
+    const countEl = document.getElementById("bulkScanCount");
+    if (countEl) {
+      countEl.style.transform = "scale(1.4)";
+      setTimeout(() => { countEl.style.transform = ""; }, 200);
+    }
   };
 
   const cleanup = async () => {
+    _bulkScanState.active = false;
+    try {
+      // Stop native video stream
+      const video = document.getElementById("bulkScanVideo");
+      if (video && video.srcObject) {
+        video.srcObject.getTracks().forEach((t) => t.stop());
+        video.srcObject = null;
+      }
+    } catch {}
     try {
       if (_bulkScanState.scanner) {
         await _bulkScanState.scanner.stop().catch(() => {});
@@ -7927,40 +8083,213 @@ function openBulkScanModal() {
 
   modalOverlay.onclick = null; // disable click-outside-to-close during bulk scan
 
-  // Init camera
-  if (!cameraReady) return;
+  _bulkScanState.active = true;
 
-  const setStatus = (t) => {
-    const s = document.getElementById("qrStatus");
-    if (s) s.textContent = t;
-  };
+  // ----- Initialise scanner -----
+  if (hasNativeDetector) {
+    initNativeBulkScanner(addImei, setStatus, cleanup);
+  } else {
+    initFallbackBulkScanner(addImei, setStatus);
+  }
+}
+
+// ===== NATIVE BarcodeDetector — way faster than JS libraries =====
+async function initNativeBulkScanner(addImei, setStatus, cleanup) {
+  try {
+    const supportedFormats = await window.BarcodeDetector.getSupportedFormats();
+    // FAST MODE: only IMEI/serial-relevant formats (Code 128 is 90% of cases)
+    // Less formats = faster detection per frame (5-10× speedup)
+    const wantedFormats = ["code_128", "code_39", "data_matrix", "qr_code"];
+    const formats = supportedFormats.filter((f) => wantedFormats.includes(f));
+    const detector = new window.BarcodeDetector({ formats });
+
+    const video = document.getElementById("bulkScanVideo");
+    if (!video) return;
+
+    setStatus("Selecting best back camera…");
+
+    // ----- Pick the BEST back camera explicitly -----
+    // Some phones have multiple back cameras (wide, ultra-wide, tele).
+    // We want the main wide-angle one for close-up barcode scanning.
+    let chosenDeviceId = null;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const backCams = devices.filter(
+        (d) => d.kind === "videoinput" && /back|rear|environment|world/i.test(d.label || "")
+      );
+      if (backCams.length > 0) {
+        // Prefer the "main" back camera (not ultra-wide / telephoto if multiple)
+        // Usually the first listed back camera is the main one
+        const main = backCams.find((c) => !/ultra.?wide|tele|macro|depth/i.test(c.label || "")) || backCams[0];
+        chosenDeviceId = main.deviceId;
+      }
+    } catch (e) {}
+
+    const videoConstraints = chosenDeviceId
+      ? {
+          deviceId: { exact: chosenDeviceId },
+          width: { ideal: 1920, min: 640 },
+          height: { ideal: 1080, min: 480 },
+          frameRate: { ideal: 30, min: 15 },
+          focusMode: "continuous",
+        }
+      : {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920, min: 640 },
+          height: { ideal: 1080, min: 480 },
+          frameRate: { ideal: 30, min: 15 },
+          focusMode: "continuous",
+        };
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: videoConstraints,
+      audio: false,
+    });
+
+    video.srcObject = stream;
+    video.muted = true;
+    video.setAttribute("playsinline", "");
+    await video.play();
+
+    const track = stream.getVideoTracks()[0];
+    const capabilities = track?.getCapabilities?.() || {};
+
+    // Apply best initial settings (zoom + continuous focus)
+    try {
+      const advanced = [];
+      if (capabilities.focusMode && capabilities.focusMode.includes("continuous")) {
+        advanced.push({ focusMode: "continuous" });
+      }
+      if (capabilities.zoom) {
+        // Slight zoom helps barcode detection (~1.5×)
+        const minZ = capabilities.zoom.min || 1;
+        const maxZ = capabilities.zoom.max || 1;
+        const targetZ = Math.min(Math.max(1.5, minZ), maxZ);
+        advanced.push({ zoom: targetZ });
+      }
+      if (advanced.length) await track.applyConstraints({ advanced });
+    } catch (e) {}
+
+    // ----- Torch button if supported -----
+    if (capabilities.torch) {
+      const torchBtn = document.getElementById("bulkTorchBtn");
+      if (torchBtn) {
+        torchBtn.style.display = "flex";
+        let torchOn = false;
+        torchBtn.addEventListener("click", async () => {
+          torchOn = !torchOn;
+          try {
+            await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+            torchBtn.classList.toggle("active", torchOn);
+          } catch (e) {}
+        });
+      }
+    }
+
+    // ----- Tap-to-focus: tap anywhere in viewfinder to refocus -----
+    if (capabilities.focusMode && capabilities.focusMode.includes("manual") || capabilities.focusDistance) {
+      const wrap = document.querySelector(".bulk-scan-viewfinder");
+      if (wrap) {
+        wrap.addEventListener("click", async (e) => {
+          if (e.target.closest(".qr-controls")) return; // ignore torch button click
+          try {
+            // Trigger single-shot autofocus by toggling focus mode
+            await track.applyConstraints({ advanced: [{ focusMode: "single-shot" }] });
+            setTimeout(async () => {
+              try {
+                await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
+              } catch (e) {}
+            }, 300);
+            const tap = document.createElement("div");
+            tap.className = "tap-focus-ring";
+            tap.style.left = (e.offsetX - 30) + "px";
+            tap.style.top = (e.offsetY - 30) + "px";
+            wrap.appendChild(tap);
+            setTimeout(() => tap.remove(), 600);
+          } catch (e) {}
+        });
+      }
+    }
+
+    setStatus("⚡ Fast scan ready — bring barcode close (Code 128 / QR)");
+
+    // ----- Scan loop using requestAnimationFrame for 60fps -----
+    let frame = 0;
+    const scanLoop = async () => {
+      if (!_bulkScanState.active) return;
+      frame++;
+      try {
+        if (video.readyState >= 2) {
+          const barcodes = await detector.detect(video);
+          if (barcodes && barcodes.length > 0) {
+            // Multi-barcode: add all unique ones detected in this frame
+            for (const bc of barcodes) {
+              const value = (bc.rawValue || "").trim();
+              if (value) addImei(value);
+            }
+          }
+        }
+      } catch (e) {
+        // silently retry next frame — common for partial-occluded barcodes
+      }
+      requestAnimationFrame(scanLoop);
+    };
+    scanLoop();
+  } catch (err) {
+    console.error("Native scanner failed:", err);
+    setStatus("Camera unavailable — type manually below.");
+  }
+}
+
+// ===== Fallback: html5-qrcode if BarcodeDetector unavailable =====
+async function initFallbackBulkScanner(addImei, setStatus) {
+  const HQR = window.Html5Qrcode;
+  if (!HQR) {
+    setStatus("Scanner unavailable — type manually below.");
+    return;
+  }
+  const HQRFormats = window.Html5QrcodeSupportedFormats;
+  const allFormats = HQRFormats ? [
+    HQRFormats.CODE_128, HQRFormats.CODE_39, HQRFormats.CODE_93,
+    HQRFormats.EAN_13, HQRFormats.QR_CODE, HQRFormats.DATA_MATRIX,
+  ] : undefined;
 
   setTimeout(async () => {
     try {
+      // Use the video element directly for html5-qrcode... actually it needs its own div
+      // Replace video with a div for html5-qrcode
+      const wrap = document.querySelector(".bulk-scan-viewfinder");
+      if (wrap) {
+        const video = document.getElementById("bulkScanVideo");
+        if (video) video.style.display = "none";
+        const div = document.createElement("div");
+        div.id = "qrReader";
+        div.style.width = "100%";
+        div.style.height = "100%";
+        wrap.insertBefore(div, wrap.firstChild);
+      }
       _bulkScanState.scanner = new HQR("qrReader", { verbose: false });
-      const HQRFormats = window.Html5QrcodeSupportedFormats;
-      const allFormats = HQRFormats ? [
-        HQRFormats.CODE_128, HQRFormats.CODE_39, HQRFormats.CODE_93,
-        HQRFormats.EAN_13, HQRFormats.QR_CODE, HQRFormats.DATA_MATRIX,
-      ] : undefined;
       await _bulkScanState.scanner.start(
         { facingMode: "environment" },
         {
-          fps: 15,
-          qrbox: (vw, vh) => ({ width: Math.min(vw * 0.9, 320), height: Math.min(vh * 0.4, 130) }),
+          fps: 20,
+          qrbox: (vw, vh) => ({ width: Math.min(vw * 0.9, 320), height: Math.min(vh * 0.45, 140) }),
           formatsToSupport: allFormats,
           experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+          videoConstraints: {
+            facingMode: "environment",
+            width: { ideal: 1920, min: 640 },
+            height: { ideal: 1080, min: 480 },
+            focusMode: "continuous",
+          },
         },
-        (decodedText) => {
-          addImei(decodedText);
-          setStatus(`✓ Scanned. Total: ${_bulkScanState.scanned.length}. Hold steady for next…`);
-        },
+        (decodedText) => addImei(decodedText),
         () => {}
       );
-      setStatus(`📷 Camera ready — scan next IMEI`);
+      setStatus("📷 Ready — point camera at barcode");
     } catch (err) {
-      console.warn("Camera start failed:", err);
-      setStatus("Camera unavailable — use manual input below.");
+      console.warn("Fallback scanner failed:", err);
+      setStatus("Camera unavailable — type manually below.");
     }
   }, 100);
 }
@@ -8022,6 +8351,20 @@ async function initApp() {
   try {
     initDb();
     render();
+    // Pre-warm BarcodeDetector + enumerate cameras silently on first user gesture
+    // This makes the FIRST scan instant instead of having to wait for camera init
+    const prewarmHandler = () => {
+      try {
+        if (typeof window.BarcodeDetector !== "undefined" && window.BarcodeDetector.getSupportedFormats) {
+          window.BarcodeDetector.getSupportedFormats().catch(() => {});
+        }
+        if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+          navigator.mediaDevices.enumerateDevices().catch(() => {});
+        }
+      } catch {}
+      document.removeEventListener("click", prewarmHandler);
+    };
+    document.addEventListener("click", prewarmHandler, { once: true, passive: true });
   } catch (err) {
     app.innerHTML = `
       ${renderHeader("GPS Maintenance Tracker", "Error")}
