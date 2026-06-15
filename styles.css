@@ -8635,3 +8635,159 @@ button.clickable-card:focus-visible {
   gap: 0.2rem;
 }
  
+/* ============================================================
+   v3.3.0 — Unified SIM Database: source badges + filter dropdowns
+   ============================================================ */
+ 
+/* Filter dropdown row */
+.sim-filter-row {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0.6rem 0 1rem;
+}
+ 
+.sim-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+ 
+.sim-filter-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+ 
+.sim-filter-group select {
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.85rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: white;
+  cursor: pointer;
+  font-weight: 600;
+  color: #1e293b;
+}
+ 
+.sim-filter-group select:focus {
+  outline: none;
+  border-color: #0891b2;
+  box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.1);
+}
+ 
+@media (max-width: 540px) {
+  .sim-filter-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+  .sim-filter-group {
+    width: 100%;
+  }
+}
+ 
+/* Source badges (📌 / 📦 / 📝) */
+.src-badge {
+  display: inline-block;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-right: 0.25rem;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+ 
+.src-badge.src-installed {
+  background: rgba(139, 92, 246, 0.15);
+  color: #6d28d9;
+}
+ 
+.src-badge.src-stock {
+  background: rgba(245, 158, 11, 0.15);
+  color: #b45309;
+}
+ 
+.src-badge.src-manual {
+  background: rgba(100, 116, 139, 0.15);
+  color: #475569;
+}
+ 
+/* Completeness badges */
+.completeness-badge {
+  display: inline-block;
+  padding: 0.22rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+ 
+.cb-complete {
+  background: rgba(16, 185, 129, 0.15);
+  color: #047857;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+ 
+.cb-needs {
+  background: rgba(249, 115, 22, 0.15);
+  color: #b45309;
+  border: 1px solid rgba(249, 115, 22, 0.35);
+  animation: completeness-pulse 2.2s ease-in-out infinite;
+}
+ 
+@keyframes completeness-pulse {
+  0%, 100% { background: rgba(249, 115, 22, 0.15); }
+  50% { background: rgba(249, 115, 22, 0.28); }
+}
+ 
+/* Missing cell indicator */
+.missing-cell {
+  color: #dc2626;
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-style: italic;
+}
+ 
+/* Source context (vehicle / project) in row */
+.src-ctx {
+  font-size: 0.82rem;
+  color: #475569;
+  font-weight: 600;
+}
+ 
+/* SIM source row in mobile card — wrap nicely */
+.sim-sources-row .tk-stat-value {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 0.25rem;
+}
+ 
+/* 6-column summary grid on mobile: 2 cols, on tablet: 3, desktop: 6 */
+.sim-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.6rem;
+}
+ 
+@media (max-width: 1024px) {
+  .sim-summary-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+ 
+@media (max-width: 640px) {
+  .sim-summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
