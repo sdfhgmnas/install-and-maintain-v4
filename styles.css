@@ -7776,3 +7776,586 @@ button.clickable-card:focus-visible {
     margin-top: 0.5rem;
   }
 }
+
+/* ============================================================
+   v3.2.5 — Mobile padding/spacing fix + visual polish
+   ============================================================ */
+
+/* ===== Tighter card padding on mobile ===== */
+@media (max-width: 880px) {
+  .card {
+    padding: 0.95rem 0.9rem !important;
+    margin-bottom: 0.75rem !important;
+    border-radius: 14px !important;
+  }
+
+  /* Main page content padding */
+  .main {
+    padding: 0.7rem 0.7rem !important;
+    gap: 0.7rem;
+  }
+
+  /* Section heading: column layout, no excess gap */
+  .section-heading {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 0.45rem !important;
+    margin-bottom: 0.6rem !important;
+    width: 100%;
+  }
+
+  .section-heading > div {
+    width: 100%;
+  }
+
+  .section-heading h2 {
+    margin: 0 !important;
+    font-size: 1rem !important;
+    line-height: 1.25;
+    font-weight: 800;
+  }
+
+  .section-heading h3 {
+    margin: 0 !important;
+    font-size: 0.95rem !important;
+  }
+
+  /* Section subtitle / description tighter */
+  .section-subtitle,
+  .modal-desc,
+  .section-heading p,
+  .card > p:first-of-type {
+    font-size: 0.78rem !important;
+    line-height: 1.4 !important;
+    margin: 0.2rem 0 0.6rem !important;
+    color: #64748b;
+  }
+
+  /* Buttons inside section heading: full width */
+  .section-heading .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Export buttons inside heading: align right or full width */
+  .section-heading .header-actions {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    justify-content: flex-start;
+  }
+  .section-heading .header-actions .btn {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .card {
+    padding: 0.85rem 0.8rem !important;
+    margin-bottom: 0.6rem !important;
+  }
+  .main {
+    padding: 0.55rem 0.55rem !important;
+  }
+}
+
+/* ===== SIM DB stats: better visual hierarchy ===== */
+@media (max-width: 880px) {
+  .summary-grid {
+    grid-template-columns: 1fr 1fr !important;
+    gap: 0.55rem !important;
+  }
+  .summary-grid .summary-box {
+    padding: 0.7rem 0.8rem !important;
+    border-left-width: 4px !important;
+    background: linear-gradient(135deg, #ffffff 0%, #fafbfc 100%);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  }
+  .summary-grid .summary-box strong {
+    font-size: 1.5rem !important;
+    line-height: 1 !important;
+    margin-bottom: 0.2rem;
+  }
+  .summary-grid .summary-box span {
+    font-size: 0.66rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.04em !important;
+    color: #64748b;
+    font-weight: 600;
+  }
+}
+
+/* ===== Pending Actions page: kill huge empty space ===== */
+@media (max-width: 880px) {
+  /* Description paragraph should not stretch */
+  .pending-intro,
+  .card > p {
+    margin: 0.3rem 0 0.8rem !important;
+  }
+
+  /* Export button row right after intro, no gap */
+  .export-row {
+    margin: 0.5rem 0 !important;
+    display: flex;
+    gap: 0.4rem;
+  }
+  .export-row .btn {
+    flex: 1;
+    padding: 0.55rem;
+  }
+
+  /* Filter chips immediately after, tight */
+  .filter-chips {
+    margin: 0.4rem 0 0.7rem !important;
+  }
+}
+
+/* ===== Hide ALL desktop-only tables on mobile via blanket selector ===== */
+@media (max-width: 880px) {
+  .table-wrap.sims-table-desktop,
+  .table-wrap.stock-table-desktop,
+  .table-wrap.repairs-table-desktop,
+  .acc-summary-desktop {
+    display: none !important;
+    height: 0 !important;
+    overflow: hidden !important;
+  }
+}
+
+/* ===== Swap warning: more compact on mobile ===== */
+@media (max-width: 880px) {
+  .swap-warning,
+  .sim-swap-banner {
+    padding: 0.7rem 0.85rem !important;
+    margin: 0.5rem 0 !important;
+    font-size: 0.82rem;
+    line-height: 1.4;
+    border-radius: 10px !important;
+  }
+  .swap-warning .btn,
+  .sim-swap-banner .btn {
+    margin-top: 0.5rem;
+    font-size: 0.78rem;
+    padding: 0.45rem 0.85rem;
+  }
+}
+
+/* ===== Top hero card (page title) more compact ===== */
+@media (max-width: 880px) {
+  .header {
+    padding: 0.85rem 0.95rem !important;
+  }
+  .header h1 {
+    font-size: 1.02rem !important;
+    line-height: 1.2;
+    margin: 0 0 0.15rem !important;
+  }
+  .header-sub {
+    font-size: 0.76rem !important;
+    line-height: 1.3;
+    color: #64748b;
+  }
+  .header-meta-row {
+    margin-top: 0.6rem !important;
+    gap: 0.4rem !important;
+    flex-wrap: wrap;
+  }
+  .header-meta-row > * {
+    font-size: 0.78rem;
+  }
+}
+
+/* ===== Make stats numbers feel more "alive" ===== */
+.summary-grid .summary-box {
+  position: relative;
+  overflow: hidden;
+}
+
+.summary-grid .summary-box::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 40px;
+  height: 40px;
+  background: radial-gradient(circle at top right, currentColor, transparent 70%);
+  opacity: 0.06;
+  pointer-events: none;
+}
+
+/* Stat number color accents matching border color */
+.summary-box[style*="border-left-color: #06b6d4"] strong,
+.summary-box[style*="border-left-color:#06b6d4"] strong {
+  color: #0891b2;
+}
+.summary-box[style*="border-left-color: #8b5cf6"] strong,
+.summary-box[style*="border-left-color:#8b5cf6"] strong {
+  color: #7c3aed;
+}
+.summary-box[style*="border-left-color: #10b981"] strong,
+.summary-box[style*="border-left-color:#10b981"] strong {
+  color: #059669;
+}
+.summary-box[style*="border-left-color: #ef4444"] strong,
+.summary-box[style*="border-left-color:#ef4444"] strong {
+  color: #dc2626;
+}
+.summary-box[style*="border-left-color: #f59e0b"] strong,
+.summary-box[style*="border-left-color:#f59e0b"] strong {
+  color: #d97706;
+}
+
+/* ===== Vehicle group card on mobile: tight + attractive ===== */
+@media (max-width: 880px) {
+  .vehicle-group {
+    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%) !important;
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04) !important;
+    padding: 0.85rem 0.9rem !important;
+    margin-bottom: 0.6rem !important;
+  }
+  .vehicle-group:hover {
+    box-shadow: 0 2px 8px rgba(8, 145, 178, 0.08) !important;
+  }
+  .vehicle-group-head h3 {
+    color: #0891b2;
+    font-size: 1rem !important;
+    font-weight: 800;
+  }
+}
+
+/* ===== Trakzee card mobile polish ===== */
+@media (max-width: 880px) {
+  .tk-card {
+    padding: 0.85rem 0.9rem !important;
+    margin-bottom: 0.6rem !important;
+    border-radius: 12px !important;
+  }
+}
+
+/* ===== Empty/blank section fix ===== */
+.card:empty,
+.card > *:only-child:empty {
+  display: none !important;
+}
+
+/* ===== Defensive: remove auto-applied min-heights ===== */
+@media (max-width: 880px) {
+  .card,
+  .table-wrap,
+  .section-heading {
+    min-height: 0 !important;
+  }
+}
+
+/* ============================================================
+   v3.2.6 — Dashboard donut cards: fix huge empty space
+   v3.2.5 ne section-heading ko column kar diya tha jo donut
+   cards ke header ko break kar raha tha. Yahan override.
+   ============================================================ */
+
+/* Donut card: reset to natural sizing, no min-heights */
+@media (max-width: 880px) {
+  .donut-card {
+    min-height: 0 !important;
+    height: auto !important;
+    aspect-ratio: auto !important;
+    padding: 0.85rem 0.9rem !important;
+    margin-bottom: 0.7rem !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    justify-content: flex-start !important;
+    gap: 0.6rem !important;
+  }
+
+  /* Heading row inside donut card: STAY ROW, don't column */
+  .donut-card .section-heading {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 0.5rem !important;
+    margin: 0 !important;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #f1f5f9;
+    width: 100%;
+  }
+
+  .donut-card .section-heading > div {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .donut-card .section-heading h2 {
+    font-size: 0.95rem !important;
+    margin: 0 !important;
+    color: #0f172a;
+    font-weight: 800;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .donut-card .card-chevron {
+    flex-shrink: 0;
+    font-size: 1.5rem;
+    color: #94a3b8;
+    line-height: 1;
+    margin-left: 0.5rem;
+  }
+
+  /* Donut card body: compact + horizontal layout */
+  .donut-card-body {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 0.7rem !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    flex: none !important;
+    min-height: 0 !important;
+  }
+
+  /* Donut chart container: small + fixed */
+  .donut-card-body svg,
+  .donut-card-body .donut-chart {
+    width: 110px !important;
+    height: 110px !important;
+    flex-shrink: 0;
+  }
+
+  /* Legend: tight, next to donut */
+  .donut-card-body .donut-legend {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: 0.78rem;
+  }
+
+  .donut-card-body .donut-legend > * {
+    line-height: 1.3;
+  }
+}
+
+@media (max-width: 480px) {
+  .donut-card {
+    padding: 0.75rem 0.8rem !important;
+  }
+  .donut-card-body svg,
+  .donut-card-body .donut-chart {
+    width: 95px !important;
+    height: 95px !important;
+  }
+  .donut-card .section-heading h2 {
+    font-size: 0.88rem !important;
+  }
+}
+
+/* Make donut cards visually pop with subtle accent gradient */
+@media (max-width: 880px) {
+  .donut-card.accent-blue {
+    background: linear-gradient(135deg, #ffffff 0%, #f0f9ff 100%) !important;
+    border-left: 4px solid #06b6d4 !important;
+  }
+  .donut-card.accent-purple {
+    background: linear-gradient(135deg, #ffffff 0%, #faf5ff 100%) !important;
+    border-left: 4px solid #8b5cf6 !important;
+  }
+  .donut-card.accent-orange {
+    background: linear-gradient(135deg, #ffffff 0%, #fff7ed 100%) !important;
+    border-left: 4px solid #f97316 !important;
+  }
+}
+
+/* Press state for clickable donut cards */
+.donut-card.clickable-card {
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.donut-card.clickable-card:active {
+  transform: scale(0.985);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+/* ============================================================
+   v3.2.7 — Clickable activity bars + bucket modal
+   ============================================================ */
+
+/* ===== Activity card empty space fix ===== */
+@media (max-width: 880px) {
+  /* Force activity card to natural height */
+  .card.accent-cyan,
+  .card.accent-purple {
+    min-height: 0 !important;
+    height: auto !important;
+    aspect-ratio: auto !important;
+  }
+
+  /* Horizontal bar chart compact on mobile */
+  .hbar-chart {
+    margin: 0 !important;
+    padding: 0.25rem 0 !important;
+    gap: 0.55rem !important;
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+/* ===== Clickable bar rows ===== */
+.hbar-row-clickable {
+  background: transparent;
+  border: none;
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.5rem;
+  margin: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  display: block;
+  font: inherit;
+  color: inherit;
+}
+
+.hbar-row-clickable:hover {
+  background: rgba(8, 145, 178, 0.06);
+}
+
+.hbar-row-clickable:active {
+  transform: scale(0.99);
+  background: rgba(8, 145, 178, 0.1);
+}
+
+.hbar-row-clickable:focus-visible {
+  outline: 2px solid #0891b2;
+  outline-offset: 2px;
+}
+
+.hbar-chevron {
+  font-size: 1.15rem;
+  color: #94a3b8;
+  margin-left: 0.4rem;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: transform 0.15s, color 0.15s;
+}
+
+.hbar-row-clickable:hover .hbar-chevron {
+  color: #0891b2;
+  transform: translateX(3px);
+}
+
+/* ===== Bucket vehicle list modal ===== */
+.bucket-vehicle-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin: 0.5rem -0.3rem;
+  padding: 0.3rem;
+}
+
+.bucket-vehicle-item {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.7rem 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.bucket-vehicle-item:hover {
+  background: white;
+  border-color: #0891b2;
+  box-shadow: 0 2px 8px rgba(8, 145, 178, 0.1);
+  transform: translateY(-1px);
+}
+
+.bucket-vehicle-item:active {
+  transform: translateY(0);
+}
+
+.bucket-vehicle-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.bucket-vehicle-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid;
+  font-weight: 700;
+  font-size: 0.82rem;
+  word-break: break-word;
+  line-height: 1.2;
+}
+
+.bucket-vehicle-days {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.bucket-vehicle-meta {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.74rem;
+  color: #64748b;
+  font-family: var(--font-mono);
+}
+
+.bucket-vehicle-foot {
+  font-size: 0.74rem;
+  color: #94a3b8;
+  padding-top: 0.4rem;
+  border-top: 1px solid #f1f5f9;
+}
+
+.bucket-vehicle-foot strong {
+  color: #475569;
+}
+
+@media (max-width: 480px) {
+  .bucket-vehicle-meta {
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+}
+
+/* ============================================================
+   v3.2.8 — Stock items: needs-supplier flag styling
+   ============================================================ */
+
+.tk-card.tk-card-needs-supplier {
+  border-left: 4px solid #6366f1;
+  background: linear-gradient(135deg, #eef2ff 0%, #ffffff 50%);
+}
+
+.needs-supplier-banner {
+  background: rgba(99, 102, 241, 0.12);
+  color: #4338ca;
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  padding: 0.45rem 0.7rem;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  margin: 0.5rem 0;
+}
