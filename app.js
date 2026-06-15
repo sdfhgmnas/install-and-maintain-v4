@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.3.0";
+const APP_VERSION = "3.3.1";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -1219,20 +1219,47 @@ function digitsOnly(s) {
 
 function isLikelyIccid(s) {
   const d = digitsOnly(s);
+  // ICCID starts with 89 (international SIM identifier per ITU-T E.118)
+  // Length typically 18-22, most commonly 19-20
+  if (d.length >= 18 && d.length <= 22 && d.startsWith("89")) return true;
+  // Fallback: just length match (for cases where prefix differs)
   return d.length >= 18 && d.length <= 22;
 }
 
 function isLikelyPrimary(s) {
   const d = digitsOnly(s);
+  // Primary mobile / MSISDN: 10-14 digits, NOT starting with 89
+  if (d.startsWith("89")) return false;
   return d.length >= 10 && d.length <= 14;
 }
 
 /**
+ * Definitively starts with "89" → must be ICCID/secondary
+ */
+function startsLikeIccid(s) {
+  return digitsOnly(s).startsWith("89");
+}
+
+/**
+ * Doesn't start with "89" and is in the mobile-number length range
+ * → must be a primary number
+ */
+function startsLikePrimary(s) {
+  const d = digitsOnly(s);
+  return !d.startsWith("89") && d.length >= 10 && d.length <= 14;
+}
+
+/**
  * Returns true if (primary, secondary) appears to be entered in the
- * wrong order — a 20-digit ICCID in the primary slot, and a short
- * 10–13 digit number in the secondary slot.
+ * wrong order. Uses both prefix (89...) and length checks for confidence.
  */
 function pairLooksSwapped(primary, secondary) {
+  const p = digitsOnly(primary);
+  const s = digitsOnly(secondary);
+  if (!p || !s) return false;
+  // Confidence 1: primary starts with 89 (clearly ICCID)
+  if (startsLikeIccid(primary) && startsLikePrimary(secondary)) return true;
+  // Confidence 2: legacy length-based check
   return isLikelyIccid(primary) && isLikelyPrimary(secondary);
 }
 
@@ -5783,13 +5810,15 @@ function buildUnifiedSimList() {
     });
   }
 
-  // Compute completeness + return as array
+  // Compute completeness + swap detection + return as array
   return Array.from(map.values()).map((e) => {
     const hasP = !!e.primary;
     const hasS = !!e.secondary;
     e.hasPrimary = hasP;
     e.hasSecondary = hasS;
     e.completeness = hasP && hasS ? "complete" : hasP ? "needs_secondary" : "needs_primary";
+    // Smart swap detection: 89... in primary slot OR mobile-no in secondary slot
+    e.looksSwapped = pairLooksSwapped(e.primary, e.secondary);
     return e;
   });
 }
@@ -5842,6 +5871,11 @@ function renderSimDb() {
     filtered = filtered.filter((e) => e.completeness === simCompletenessFilter);
   }
 
+  // Apply "show only swapped" temp filter (from Review List action)
+  if (window._showOnlySwapped) {
+    filtered = filtered.filter((e) => e.looksSwapped);
+  }
+
   // Apply search
   const q = simDbQuery.trim().toLowerCase();
   if (q) {
@@ -5872,7 +5906,29 @@ function renderSimDb() {
     needsPrimary: unifiedList.filter((e) => e.completeness === "needs_primary").length,
     needsSecondary: unifiedList.filter((e) => e.completeness === "needs_secondary").length,
     complete: unifiedList.filter((e) => e.completeness === "complete").length,
+    swapped: unifiedList.filter((e) => e.looksSwapped).length,
   };
+
+  // Auto-detect swap requirements based on 89/57 prefix rules
+  const swapBannerHtml = stats.swapped > 0 ? `
+    <section class="card swap-banner-card">
+      <div class="swap-banner-header">
+        <div class="swap-banner-icon">↔️</div>
+        <div class="swap-banner-text">
+          <h3>Bulk Swap Required for ${stats.swapped} SIM${stats.swapped === 1 ? "" : "s"}</h3>
+          <p>
+            Auto-detected: <strong>${stats.swapped}</strong> SIM${stats.swapped === 1 ? "" : "s"} have their primary & secondary swapped.
+            Numbers starting with <code>89</code> belong in <strong>Secondary (ICCID)</strong>,
+            and mobile numbers (like <code>57…</code>) belong in <strong>Primary</strong>.
+          </p>
+        </div>
+      </div>
+      <div class="swap-banner-actions">
+        <button type="button" class="btn btn-warn" id="bulkSwapBtn">↔ Bulk Swap All (${stats.swapped})</button>
+        <button type="button" class="btn btn-outline btn-sm" id="reviewSwapsBtn">👁 Review List First</button>
+      </div>
+    </section>
+  ` : "";
 
   app.innerHTML = `
     ${renderHeader("SIM Database", "Unified — manual + installation + stock")}
@@ -5905,6 +5961,8 @@ function renderSimDb() {
           <span>Needs Secondary</span>
         </div>
       </div>
+
+      ${swapBannerHtml}
 
       <section class="card">
         <div class="section-heading">
@@ -5942,7 +6000,7 @@ function renderSimDb() {
               <option value="complete" ${simCompletenessFilter === "complete" ? "selected" : ""}>✓ Complete (${stats.complete})</option>
             </select>
           </label>
-          ${(simSourceFilter !== "all" || simCompletenessFilter !== "all" || simDbQuery) ? `
+          ${(simSourceFilter !== "all" || simCompletenessFilter !== "all" || simDbQuery || window._showOnlySwapped) ? `
             <button type="button" class="btn btn-secondary btn-sm" id="clearSimFilters">✕ Clear filters</button>
           ` : ""}
         </div>
@@ -6003,10 +6061,22 @@ function renderSimDb() {
     simSourceFilter = "all";
     simCompletenessFilter = "all";
     simDbQuery = "";
+    window._showOnlySwapped = false;
     render();
   });
   document.getElementById("addSimBtn")?.addEventListener("click", () => openSimEditor(null));
   document.getElementById("exportUnifiedSimsBtn")?.addEventListener("click", () => exportUnifiedSimsToExcel(filtered));
+  document.getElementById("bulkSwapBtn")?.addEventListener("click", () => openBulkSwapModal());
+  document.getElementById("reviewSwapsBtn")?.addEventListener("click", () => {
+    // Filter to only show swapped entries
+    simCompletenessFilter = "all";
+    simSourceFilter = "all";
+    simDbQuery = "";
+    // Use a special flag to filter swapped — add temp filter
+    window._showOnlySwapped = true;
+    render();
+    showToast(`Showing ${stats.swapped} SIM${stats.swapped === 1 ? "" : "s"} flagged for swap.`);
+  });
 
   // Wire up row/card actions
   app.querySelectorAll(".unified-sim-edit").forEach((btn) => {
@@ -6222,6 +6292,165 @@ async function promoteToSimDb(entryId) {
     setTimeout(() => openSimEditor(saved.id), 200);
   } catch (err) {
     showToast(err.message || "Failed to add.", true);
+  }
+}
+
+function openBulkSwapModal() {
+  const unified = buildUnifiedSimList();
+  const swapped = unified.filter((e) => e.looksSwapped);
+  if (swapped.length === 0) {
+    showToast("No SIMs need swapping.");
+    return;
+  }
+
+  // Preview list — show before/after
+  const previewHtml = swapped.slice(0, 20).map((e, i) => {
+    const tail = (s) => {
+      const v = String(s || "");
+      return v.length > 16 ? "…" + v.slice(-14) : v;
+    };
+    return `
+      <div class="swap-preview-row">
+        <div class="swap-preview-num">${i + 1}</div>
+        <div class="swap-preview-before">
+          <div class="swap-preview-label">BEFORE</div>
+          <div class="swap-preview-line"><span>P:</span> <span class="mono swap-wrong">${escapeHtml(tail(e.primary))}</span></div>
+          <div class="swap-preview-line"><span>S:</span> <span class="mono swap-wrong">${escapeHtml(tail(e.secondary))}</span></div>
+        </div>
+        <div class="swap-preview-arrow">↔</div>
+        <div class="swap-preview-after">
+          <div class="swap-preview-label">AFTER</div>
+          <div class="swap-preview-line"><span>P:</span> <span class="mono swap-right">${escapeHtml(tail(e.secondary))}</span></div>
+          <div class="swap-preview-line"><span>S:</span> <span class="mono swap-right">${escapeHtml(tail(e.primary))}</span></div>
+        </div>
+        <div class="swap-preview-src">
+          ${e.sources.map(sourceBadgeHtml).join(" ")}
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  modal.innerHTML = `
+    <h3 style="margin:0 0 0.4rem;">↔️ Bulk Swap Primary & Secondary</h3>
+    <p class="modal-desc">
+      <strong>${swapped.length}</strong> SIM${swapped.length === 1 ? " has" : "s have"} primary/secondary in wrong fields.
+      Numbers starting with <code>89</code> will move to <strong>Secondary (ICCID)</strong> and others to <strong>Primary</strong>.
+      ${swapped.length > 20 ? `<br><br>Showing first 20 below. All ${swapped.length} will be processed.` : ""}
+    </p>
+
+    <div class="swap-preview-list">
+      ${previewHtml}
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
+      <button type="button" class="btn btn-warn" data-act="confirm">↔ Confirm Swap All (${swapped.length})</button>
+    </div>
+  `;
+  modalOverlay.classList.remove("hidden");
+
+  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+  modal.querySelector('[data-act="confirm"]').onclick = () => executeBulkSwap(swapped);
+}
+
+async function executeBulkSwap(swapped) {
+  let successCount = 0;
+  let errorCount = 0;
+  const errors = [];
+
+  // Disable button + show progress
+  const confirmBtn = modal.querySelector('[data-act="confirm"]');
+  if (confirmBtn) {
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = `Swapping 0 / ${swapped.length}…`;
+  }
+
+  for (let i = 0; i < swapped.length; i++) {
+    const e = swapped[i];
+    try {
+      await applySwap(e);
+      successCount++;
+    } catch (err) {
+      errorCount++;
+      errors.push({ entry: e, message: err.message });
+      console.error("Swap failed for", e, err);
+    }
+    if (confirmBtn) {
+      confirmBtn.textContent = `Swapping ${i + 1} / ${swapped.length}…`;
+    }
+  }
+
+  // Refresh data so changes reflect
+  await refreshAllData();
+  closeModal();
+  render();
+
+  if (errorCount === 0) {
+    showToast(`✓ ${successCount} SIM${successCount === 1 ? "" : "s"} swapped successfully.`);
+  } else {
+    showToast(`Done — ${successCount} OK, ${errorCount} failed. Check console.`, true);
+  }
+}
+
+/**
+ * Swaps primary <-> secondary for a single unified entry, across whichever
+ * sources it came from (sims table, installation, stock metadata).
+ */
+async function applySwap(entry) {
+  const newPrimary = entry.secondary;
+  const newSecondary = entry.primary;
+
+  // 1) sims table entry
+  if (entry.simRecordId) {
+    const existing = sims.find((s) => s.id === entry.simRecordId);
+    if (existing) {
+      const updated = {
+        ...existing,
+        primaryNumber: newPrimary,
+        secondaryNumber: newSecondary,
+      };
+      await updateSim(updated);
+      const idx = sims.findIndex((s) => s.id === existing.id);
+      if (idx >= 0) sims[idx] = updated;
+    }
+  }
+
+  // 2) installation entry — swap simHistory last item with secondarySim
+  if (entry.installId) {
+    const inst = installations.find((i) => i.id === entry.installId);
+    if (inst) {
+      const newHistory = [...(inst.simHistory || [])];
+      if (newHistory.length > 0) {
+        newHistory[newHistory.length - 1] = newPrimary;
+      } else {
+        newHistory.push(newPrimary);
+      }
+      const updated = {
+        ...inst,
+        simHistory: newHistory,
+        secondarySim: newSecondary,
+      };
+      await updateInstallation(updated);
+      // Update local cache too
+      const idx = installations.findIndex((i) => i.id === inst.id);
+      if (idx >= 0) installations[idx] = updated;
+    }
+  }
+
+  // 3) stock entry — swap metadata.primary <-> metadata.secondary (or m.imei)
+  if (entry.stockItemId) {
+    const item = stockItems.find((s) => s.id === entry.stockItemId);
+    if (item) {
+      const newMeta = { ...(item.metadata || {}) };
+      // Old data may have ICCID in m.imei (bulk-scanned). Promote to secondary.
+      newMeta.primary = newPrimary;
+      newMeta.secondary = newSecondary;
+      delete newMeta.imei; // clean up: no longer needed since we have proper fields
+      const updated = { ...item, metadata: newMeta };
+      await updateStockItem(updated);
+      const idx = stockItems.findIndex((s) => s.id === item.id);
+      if (idx >= 0) stockItems[idx] = updated;
+    }
   }
 }
 
@@ -9563,5 +9792,8 @@ async function initApp() {
 }
 
 initApp();
+
+
+
 
 
