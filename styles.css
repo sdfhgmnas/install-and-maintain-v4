@@ -8359,3 +8359,205 @@ button.clickable-card:focus-visible {
   font-weight: 600;
   margin: 0.5rem 0;
 }
+
+/* ============================================================
+   v3.2.9 — Bulk scan modal: sticky action footer
+   v3.2.10 — Fix scrolling (modal itself scrolls, footer sticky)
+   ============================================================ */
+
+/* Modal becomes the scroll container */
+.modal.modal-wide {
+  max-height: 92vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: block;
+  padding-bottom: 0;
+  -webkit-overflow-scrolling: touch;
+  /* Anchor for sticky footer */
+  position: relative;
+}
+
+@media (max-width: 640px) {
+  .modal.modal-wide {
+    max-height: 92vh;
+    border-radius: 14px 14px 0 0;
+    margin: 0;
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
+/* All sections inside flow naturally (no flex constraint) */
+.modal.modal-wide > h3,
+.modal.modal-wide > .modal-desc,
+.modal.modal-wide > #scanModeSwitcher,
+.modal.modal-wide > .bulk-scan-stats,
+.modal.modal-wide > .bulk-scan-viewfinder,
+.modal.modal-wide > .manual-entry-block,
+.modal.modal-wide > .bulk-scanned-list {
+  flex: none;
+}
+
+/* Scanned items list — grows naturally, modal scrolls to it */
+.modal.modal-wide > .bulk-scanned-list {
+  max-height: none;
+  overflow: visible;
+  margin-bottom: 1rem;
+}
+
+/* Inner list itself scrolls if it gets really long (>250px) */
+.modal.modal-wide > .bulk-scanned-list .bulk-list {
+  max-height: 280px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 0.3rem;
+}
+
+/* Sticky action footer */
+.modal.modal-wide > .modal-actions {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  margin: 0.5rem -1.25rem 0;
+  padding: 0.75rem 1.25rem calc(0.75rem + env(safe-area-inset-bottom));
+  background: white;
+  border-top: 1px solid #e2e8f0;
+  box-shadow: 0 -4px 12px rgba(15, 23, 42, 0.08);
+  display: flex;
+  gap: 0.5rem;
+  z-index: 10;
+}
+
+.modal.modal-wide > .modal-actions .btn {
+  flex: 1;
+  min-height: 48px;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.modal.modal-wide > .modal-actions .btn[data-act="cancel"] {
+  flex: 0 0 auto;
+  min-width: 90px;
+}
+
+.modal.modal-wide > .modal-actions #bulkSaveAll {
+  flex: 1;
+}
+
+/* Save All disabled — clear grey, but still visible */
+.modal.modal-wide > .modal-actions #bulkSaveAll:disabled {
+  background: #cbd5e1;
+  color: #64748b;
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+.modal.modal-wide > .modal-actions #bulkSaveAll:not(:disabled) {
+  background: #10b981;
+  animation: save-btn-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes save-btn-pulse {
+  0%, 100% { box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3); }
+  50% { box-shadow: 0 2px 16px rgba(16, 185, 129, 0.55); }
+}
+
+/* Compact viewfinder on mobile so other content fits */
+@media (max-width: 640px) {
+  .bulk-scan-viewfinder {
+    height: 220px !important;
+    margin-bottom: 0.4rem;
+  }
+  .bulk-scan-stats {
+    padding: 0.6rem 0.9rem !important;
+    margin-bottom: 0.4rem;
+  }
+  .bulk-scan-stats .bulk-stat-num {
+    font-size: 1.8rem !important;
+  }
+  .modal.modal-wide > .bulk-scanned-list .bulk-list {
+    max-height: 220px;
+  }
+  .modal.modal-wide > .bulk-scanned-list h4 {
+    font-size: 0.85rem;
+    margin: 0.4rem 0;
+  }
+  .modal.modal-wide > h3 {
+    font-size: 1rem;
+    margin-bottom: 0.2rem;
+  }
+  .modal.modal-wide > .modal-desc {
+    font-size: 0.75rem;
+    margin-bottom: 0.4rem;
+  }
+}
+
+/* Scanned list items: clean look */
+.bulk-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.bulk-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.bulk-list-num {
+  flex-shrink: 0;
+  width: 24px;
+  color: #64748b;
+  font-weight: 700;
+}
+
+.bulk-list-imei {
+  flex: 1;
+  word-break: break-all;
+  color: #1e293b;
+  font-weight: 600;
+}
+
+.bulk-list-remove {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+  font-size: 1.2rem;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.bulk-list-remove:active {
+  background: rgba(239, 68, 68, 0.2);
+  transform: scale(0.92);
+}
+
+.bulk-list-empty {
+  text-align: center;
+  color: #94a3b8;
+  font-size: 0.85rem;
+  font-style: italic;
+  padding: 1rem;
+  background: #f8fafc;
+  border: 1px dashed #e2e8f0;
+  border-radius: 8px;
+}
