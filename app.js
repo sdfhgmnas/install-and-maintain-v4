@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.2.8";
+const APP_VERSION = "3.2.10";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -8483,7 +8483,9 @@ function openBulkScanModal() {
     const saveBtn = document.getElementById("bulkSaveAll");
     if (saveBtn) {
       saveBtn.disabled = count === 0;
-      saveBtn.textContent = `Save All (${count})`;
+      saveBtn.textContent = count === 0
+        ? "Save All (0)"
+        : `✓ Save All (${count})`;
     }
     if (!list) return;
     if (!count) {
@@ -8928,4 +8930,3 @@ async function initApp() {
 }
 
 initApp();
-
