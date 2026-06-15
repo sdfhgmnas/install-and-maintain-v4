@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.2.11";
+const APP_VERSION = "3.3.0";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -57,6 +57,8 @@ let pendingFilter = "all";
 let showCompleted = false;
 let timelineQuery = "";
 let simDbQuery = "";
+let simSourceFilter = "all"; // all | installed | stock | manual
+let simCompletenessFilter = "all"; // all | needs_primary | needs_secondary | complete
 let stockQuery = "";
 let stockCategoryFilter = "all";
 let installations = [];
@@ -5674,7 +5676,577 @@ function renderSimUpload() {
 
 /* ---------------- Page 6: SIM Database (read-only view) ---------------- */
 
+/**
+ * Builds a unified SIM list across all sources (manual sims table, installations, stock).
+ * Deduplicates by primary or secondary number. Returns array of:
+ *   { id, primary, secondary, sources[], primarySource, secondarySource, ... }
+ * Each entry knows its origin and completeness.
+ */
+function buildUnifiedSimList() {
+  const map = new Map(); // key: dedup key (primary or secondary), value: entry
+  const norm = (v) => String(v || "").trim();
+  const dedupKey = (primary, secondary) => {
+    // Use secondary first (ICCID is most unique), then primary
+    const s = norm(secondary);
+    const p = norm(primary);
+    if (s) return `s:${s}`;
+    if (p) return `p:${p}`;
+    return null;
+  };
+
+  const upsert = (entry) => {
+    const key = dedupKey(entry.primary, entry.secondary);
+    if (!key) return;
+    if (map.has(key)) {
+      // Merge with existing
+      const existing = map.get(key);
+      if (entry.primary && !existing.primary) {
+        existing.primary = entry.primary;
+        existing.primarySource = entry.primarySource || entry.source;
+      }
+      if (entry.secondary && !existing.secondary) {
+        existing.secondary = entry.secondary;
+        existing.secondarySource = entry.secondarySource || entry.source;
+      }
+      // Add this source to the list
+      if (!existing.sources.includes(entry.source)) {
+        existing.sources.push(entry.source);
+      }
+      // Keep useful metadata
+      if (entry.vehicleNo && !existing.vehicleNo) existing.vehicleNo = entry.vehicleNo;
+      if (entry.installId && !existing.installId) existing.installId = entry.installId;
+      if (entry.stockItemId && !existing.stockItemId) existing.stockItemId = entry.stockItemId;
+      if (entry.stockProject && !existing.stockProject) existing.stockProject = entry.stockProject;
+      if (entry.simRecordId && !existing.simRecordId) existing.simRecordId = entry.simRecordId;
+      if (entry.simRecord && !existing.simRecord) existing.simRecord = entry.simRecord;
+      if (entry.notes && !existing.notes) existing.notes = entry.notes;
+      if (entry.createdAt && (!existing.createdAt || entry.createdAt < existing.createdAt)) {
+        existing.createdAt = entry.createdAt;
+      }
+    } else {
+      map.set(key, { ...entry, sources: [entry.source] });
+    }
+  };
+
+  // 1) From manual sims table
+  for (const sim of (sims || [])) {
+    upsert({
+      id: `sim:${sim.id}`,
+      primary: norm(sim.primaryNumber),
+      secondary: norm(sim.secondaryNumber),
+      source: "manual",
+      primarySource: sim.primaryNumber ? "manual" : null,
+      secondarySource: sim.secondaryNumber ? "manual" : null,
+      simRecordId: sim.id,
+      simRecord: sim,
+      notes: sim.notes || "",
+      createdAt: sim.createdAt,
+    });
+  }
+
+  // 2) From installations (current SIM in use)
+  for (const inst of (installations || [])) {
+    const primary = norm(getCurrentSim(inst));
+    const secondary = norm(inst.secondarySim);
+    if (!primary && !secondary) continue;
+    upsert({
+      id: `inst:${inst.id}`,
+      primary,
+      secondary,
+      source: "installed",
+      primarySource: primary ? "installed" : null,
+      secondarySource: secondary ? "installed" : null,
+      vehicleNo: inst.vehicleNo,
+      installId: inst.id,
+      createdAt: inst.updatedAt || inst.createdAt,
+    });
+  }
+
+  // 3) From stock items with SIM category
+  for (const item of (stockItems || [])) {
+    if (categoryKind(item.category) !== "sim") continue;
+    const m = item.metadata || {};
+    const primary = norm(m.primary);
+    const secondary = norm(m.secondary || m.imei); // bulk-scanned land in m.imei
+    if (!primary && !secondary) continue;
+    upsert({
+      id: `stock:${item.id}`,
+      primary,
+      secondary,
+      source: "stock",
+      primarySource: primary ? "stock" : null,
+      secondarySource: secondary ? "stock" : null,
+      stockItemId: item.id,
+      stockProject: m.project || "",
+      stockName: item.name,
+      createdAt: item.createdAt,
+    });
+  }
+
+  // Compute completeness + return as array
+  return Array.from(map.values()).map((e) => {
+    const hasP = !!e.primary;
+    const hasS = !!e.secondary;
+    e.hasPrimary = hasP;
+    e.hasSecondary = hasS;
+    e.completeness = hasP && hasS ? "complete" : hasP ? "needs_secondary" : "needs_primary";
+    return e;
+  });
+}
+
 function renderSimDb() {
+  if (!simsTableReady) {
+    app.innerHTML = `
+      ${renderHeader("SIM Database", "Standalone SIM inventory")}
+      <main class="main">
+        ${renderAdminNav("sim-db")}
+        <section class="card">
+          <h2>⚙️ Migration needed</h2>
+          <p>The new SIM database needs a one-time setup. Open Supabase SQL Editor and run <code>sims-table-migration.sql</code>, then come back here.</p>
+          <div class="form-actions" style="margin-top: 1rem;">
+            <a class="btn btn-primary" href="https://supabase.com/dashboard/project/jzclmcjurfehpfybxryh/sql/new" target="_blank" rel="noopener">Open SQL Editor →</a>
+            <button type="button" class="btn btn-secondary" id="retrySimDb">↻ Reload</button>
+          </div>
+        </section>
+      </main>
+    `;
+    bindLogout();
+    bindAdminNav();
+    document.getElementById("retrySimDb")?.addEventListener("click", async () => {
+      renderLoading("Checking SIM table...");
+      try {
+        await refreshAllData();
+        render();
+      } catch (err) {
+        renderConnectionError(err.message);
+      }
+    });
+    return;
+  }
+
+  // Build unified list across all sources
+  const unifiedList = buildUnifiedSimList();
+
+  // Apply source filter
+  let filtered = unifiedList;
+  if (simSourceFilter === "installed") {
+    filtered = filtered.filter((e) => e.sources.includes("installed"));
+  } else if (simSourceFilter === "stock") {
+    filtered = filtered.filter((e) => e.sources.includes("stock"));
+  } else if (simSourceFilter === "manual") {
+    filtered = filtered.filter((e) => e.sources.includes("manual"));
+  }
+
+  // Apply completeness filter
+  if (simCompletenessFilter !== "all") {
+    filtered = filtered.filter((e) => e.completeness === simCompletenessFilter);
+  }
+
+  // Apply search
+  const q = simDbQuery.trim().toLowerCase();
+  if (q) {
+    filtered = filtered.filter((e) =>
+      (e.primary || "").toLowerCase().includes(q) ||
+      (e.secondary || "").toLowerCase().includes(q) ||
+      (e.notes || "").toLowerCase().includes(q) ||
+      (e.vehicleNo || "").toLowerCase().includes(q) ||
+      (e.stockProject || "").toLowerCase().includes(q)
+    );
+  }
+
+  // Sort: incomplete first (needs_primary, needs_secondary), then complete; within each, newest first
+  filtered.sort((a, b) => {
+    const order = { needs_primary: 0, needs_secondary: 1, complete: 2 };
+    const oa = order[a.completeness] || 99;
+    const ob = order[b.completeness] || 99;
+    if (oa !== ob) return oa - ob;
+    return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+  });
+
+  // Stats
+  const stats = {
+    total: unifiedList.length,
+    installed: unifiedList.filter((e) => e.sources.includes("installed")).length,
+    stock: unifiedList.filter((e) => e.sources.includes("stock")).length,
+    manual: unifiedList.filter((e) => e.sources.includes("manual")).length,
+    needsPrimary: unifiedList.filter((e) => e.completeness === "needs_primary").length,
+    needsSecondary: unifiedList.filter((e) => e.completeness === "needs_secondary").length,
+    complete: unifiedList.filter((e) => e.completeness === "complete").length,
+  };
+
+  app.innerHTML = `
+    ${renderHeader("SIM Database", "Unified — manual + installation + stock")}
+    <main class="main">
+      ${renderAdminNav("sim-db")}
+
+      <div class="summary-grid sim-summary-grid">
+        <div class="summary-box" style="border-left-color: #06b6d4;">
+          <strong>${stats.total}</strong>
+          <span>Total Unified</span>
+        </div>
+        <div class="summary-box" style="border-left-color: #8b5cf6;">
+          <strong>${stats.installed}</strong>
+          <span>In Use</span>
+        </div>
+        <div class="summary-box" style="border-left-color: #f59e0b;">
+          <strong>${stats.stock}</strong>
+          <span>In Stock</span>
+        </div>
+        <div class="summary-box" style="border-left-color: #64748b;">
+          <strong>${stats.manual}</strong>
+          <span>Manual</span>
+        </div>
+        <div class="summary-box ${stats.needsPrimary ? '' : ''}" style="border-left-color: #ef4444;">
+          <strong>${stats.needsPrimary}</strong>
+          <span>Needs Primary</span>
+        </div>
+        <div class="summary-box" style="border-left-color: #f97316;">
+          <strong>${stats.needsSecondary}</strong>
+          <span>Needs Secondary</span>
+        </div>
+      </div>
+
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <h2>SIM Database (${filtered.length}${filtered.length !== unifiedList.length ? ` of ${unifiedList.length}` : ""})</h2>
+            <p class="section-subtitle">Unified view — manually added + installed in vehicles + in stock. No duplicates.</p>
+          </div>
+          <div class="bulk-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="addSimBtn">+ Add Manual</button>
+            <button type="button" class="btn btn-outline btn-sm" id="exportUnifiedSimsBtn">↓ Export Excel</button>
+          </div>
+        </div>
+
+        <div class="list-tools admin-search sticky-search">
+          <input type="search" id="simSearch" placeholder="Search primary, secondary, vehicle, project, notes..." value="${escapeHtml(simDbQuery)}" />
+        </div>
+
+        <!-- Filter dropdowns -->
+        <div class="sim-filter-row">
+          <label class="sim-filter-group">
+            <span class="sim-filter-label">Source:</span>
+            <select id="simSourceFilter">
+              <option value="all" ${simSourceFilter === "all" ? "selected" : ""}>All sources (${stats.total})</option>
+              <option value="installed" ${simSourceFilter === "installed" ? "selected" : ""}>📌 Installed SIMs (${stats.installed})</option>
+              <option value="stock" ${simSourceFilter === "stock" ? "selected" : ""}>📦 Stock SIMs (${stats.stock})</option>
+              <option value="manual" ${simSourceFilter === "manual" ? "selected" : ""}>📝 Manual entries (${stats.manual})</option>
+            </select>
+          </label>
+          <label class="sim-filter-group">
+            <span class="sim-filter-label">Status:</span>
+            <select id="simCompletenessFilter">
+              <option value="all" ${simCompletenessFilter === "all" ? "selected" : ""}>All status</option>
+              <option value="needs_primary" ${simCompletenessFilter === "needs_primary" ? "selected" : ""}>⚠️ Needs primary (${stats.needsPrimary})</option>
+              <option value="needs_secondary" ${simCompletenessFilter === "needs_secondary" ? "selected" : ""}>⚠️ Needs secondary (${stats.needsSecondary})</option>
+              <option value="complete" ${simCompletenessFilter === "complete" ? "selected" : ""}>✓ Complete (${stats.complete})</option>
+            </select>
+          </label>
+          ${(simSourceFilter !== "all" || simCompletenessFilter !== "all" || simDbQuery) ? `
+            <button type="button" class="btn btn-secondary btn-sm" id="clearSimFilters">✕ Clear filters</button>
+          ` : ""}
+        </div>
+
+        <!-- Desktop table -->
+        <div class="table-wrap sims-table-desktop">
+          <table>
+            <thead>
+              <tr>
+                <th>Primary (Mobile No)</th>
+                <th>Secondary (ICCID)</th>
+                <th>Status</th>
+                <th>Source</th>
+                <th>Vehicle / Project</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${filtered.length
+                ? filtered.map((e) => renderUnifiedSimRow(e)).join("")
+                : `<tr class="empty-row"><td colspan="6">No SIMs match the filters.</td></tr>`
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Mobile card grid -->
+        <div class="sims-card-grid">
+          ${filtered.length
+            ? filtered.map((e) => renderUnifiedSimCard(e)).join("")
+            : `<div class="entry-empty"><div class="entry-empty-icon">📶</div><h3>No SIMs found</h3><p>${q || simSourceFilter !== "all" || simCompletenessFilter !== "all" ? "Try different filters." : "Use + Add Manual or bulk-add via Stock."}</p></div>`
+          }
+        </div>
+      </section>
+    </main>
+  `;
+
+  bindLogout();
+  bindAdminNav();
+  document.getElementById("simSearch")?.addEventListener("input", (e) => {
+    simDbQuery = e.target.value;
+    render();
+    const el = document.getElementById("simSearch");
+    if (el) {
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    }
+  });
+  document.getElementById("simSourceFilter")?.addEventListener("change", (e) => {
+    simSourceFilter = e.target.value;
+    render();
+  });
+  document.getElementById("simCompletenessFilter")?.addEventListener("change", (e) => {
+    simCompletenessFilter = e.target.value;
+    render();
+  });
+  document.getElementById("clearSimFilters")?.addEventListener("click", () => {
+    simSourceFilter = "all";
+    simCompletenessFilter = "all";
+    simDbQuery = "";
+    render();
+  });
+  document.getElementById("addSimBtn")?.addEventListener("click", () => openSimEditor(null));
+  document.getElementById("exportUnifiedSimsBtn")?.addEventListener("click", () => exportUnifiedSimsToExcel(filtered));
+
+  // Wire up row/card actions
+  app.querySelectorAll(".unified-sim-edit").forEach((btn) => {
+    btn.addEventListener("click", () => openUnifiedSimEditor(btn.dataset.entryId));
+  });
+  app.querySelectorAll(".unified-sim-goto").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const installId = btn.dataset.installId;
+      const inst = installations.find((i) => i.id === installId);
+      if (inst) {
+        searchQuery = inst.vehicleNo;
+        setView("installations");
+      }
+    });
+  });
+  app.querySelectorAll(".unified-sim-stock").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      stockQuery = btn.dataset.stockId;
+      setView("stock");
+    });
+  });
+  app.querySelectorAll(".unified-sim-promote").forEach((btn) => {
+    btn.addEventListener("click", () => promoteToSimDb(btn.dataset.entryId));
+  });
+
+  // Click row also opens edit
+  app.querySelectorAll(".stock-copy-btn").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const v = btn.dataset.copy;
+      const label = btn.dataset.label || "Value";
+      try {
+        await navigator.clipboard.writeText(v);
+        showToast(`✓ ${label} copied`);
+        btn.textContent = "✓";
+        btn.classList.add("stock-copy-done");
+        setTimeout(() => { btn.textContent = "⎘"; btn.classList.remove("stock-copy-done"); }, 1200);
+      } catch (err) {}
+    });
+  });
+}
+
+function renderUnifiedSimRow(e) {
+  const sourceBadges = e.sources.map((s) => sourceBadgeHtml(s)).join(" ");
+  const statusBadge = completenessBadgeHtml(e.completeness);
+  const useCtx = e.vehicleNo
+    ? `<span class="src-ctx">🚛 ${escapeHtml(e.vehicleNo)}</span>`
+    : e.stockProject
+    ? `<span class="src-ctx">📁 ${escapeHtml(e.stockProject)}</span>`
+    : "—";
+  const tail = (s) => {
+    const v = String(s || "");
+    return v.length > 12 ? "…" + v.slice(-10) : v;
+  };
+  return `
+    <tr>
+      <td class="mono">
+        ${e.hasPrimary
+          ? `${escapeHtml(e.primary)} ${stockCopyBtn(e.primary, "Primary")}`
+          : `<span class="missing-cell">⚠️ Missing</span>`}
+      </td>
+      <td class="mono">
+        ${e.hasSecondary
+          ? `${escapeHtml(tail(e.secondary))} ${stockCopyBtn(e.secondary, "Secondary")}`
+          : `<span class="missing-cell">⚠️ Missing</span>`}
+      </td>
+      <td>${statusBadge}</td>
+      <td>${sourceBadges}</td>
+      <td>${useCtx}</td>
+      <td class="row-actions">
+        ${e.simRecordId
+          ? `<button type="button" class="btn btn-outline btn-sm unified-sim-edit" data-entry-id="${escapeHtml(e.id)}">✎ Edit</button>`
+          : `<button type="button" class="btn btn-primary btn-sm unified-sim-promote" data-entry-id="${escapeHtml(e.id)}" title="Add to SIM DB so you can edit primary/secondary">+ To DB</button>`}
+        ${e.installId
+          ? `<button type="button" class="btn btn-secondary btn-sm unified-sim-goto" data-install-id="${escapeHtml(e.installId)}" title="Open installation">→ Install</button>`
+          : ""}
+      </td>
+    </tr>
+  `;
+}
+
+function renderUnifiedSimCard(e) {
+  const sourceBadges = e.sources.map((s) => sourceBadgeHtml(s)).join(" ");
+  const statusBadge = completenessBadgeHtml(e.completeness);
+  const tail = (s) => {
+    const v = String(s || "");
+    return v.length > 14 ? "…" + v.slice(-12) : v;
+  };
+  return `
+    <article class="tk-card ${e.completeness !== "complete" ? "tk-card-warn" : ""}">
+      <div class="tk-card-head">
+        <span class="tk-pill">${e.hasPrimary ? escapeHtml(e.primary) : "⚠️ No primary"}</span>
+        ${statusBadge}
+      </div>
+      <div class="tk-stats">
+        <div class="tk-stat tk-stat-full">
+          <span class="tk-stat-icon">📶</span>
+          <span class="tk-stat-label">Secondary:</span>
+          <span class="tk-stat-value mono">${e.hasSecondary ? escapeHtml(tail(e.secondary)) : "⚠️ Missing"}</span>
+          ${e.hasSecondary ? stockCopyBtn(e.secondary, "Secondary") : ""}
+        </div>
+        ${e.hasPrimary ? `
+          <div class="tk-stat tk-stat-full">
+            <span class="tk-stat-icon">📱</span>
+            <span class="tk-stat-label">Primary:</span>
+            <span class="tk-stat-value mono">${escapeHtml(e.primary)}</span>
+            ${stockCopyBtn(e.primary, "Primary")}
+          </div>
+        ` : ""}
+        <div class="tk-stat tk-stat-full sim-sources-row">
+          <span class="tk-stat-icon">🏷️</span>
+          <span class="tk-stat-label">Source:</span>
+          <span class="tk-stat-value">${sourceBadges}</span>
+        </div>
+        ${e.vehicleNo ? `
+          <div class="tk-stat tk-stat-full">
+            <span class="tk-stat-icon">🚛</span>
+            <span class="tk-stat-label">Vehicle:</span>
+            <span class="tk-stat-value">${escapeHtml(e.vehicleNo)}</span>
+          </div>
+        ` : ""}
+        ${e.stockProject ? `
+          <div class="tk-stat tk-stat-full">
+            <span class="tk-stat-icon">📁</span>
+            <span class="tk-stat-label">Project:</span>
+            <span class="tk-stat-value">${escapeHtml(e.stockProject)}</span>
+          </div>
+        ` : ""}
+        ${e.notes ? `
+          <div class="tk-stat tk-stat-full">
+            <span class="tk-stat-icon">📝</span>
+            <span class="tk-stat-label">Notes:</span>
+            <span class="tk-stat-value" style="white-space:normal;">${escapeHtml(e.notes)}</span>
+          </div>
+        ` : ""}
+      </div>
+      <div class="tk-actions">
+        ${e.simRecordId
+          ? `<button type="button" class="btn btn-outline btn-sm unified-sim-edit" data-entry-id="${escapeHtml(e.id)}">✎ Edit</button>`
+          : `<button type="button" class="btn btn-primary btn-sm unified-sim-promote" data-entry-id="${escapeHtml(e.id)}">+ To SIM DB</button>`}
+        ${e.installId
+          ? `<button type="button" class="btn btn-secondary btn-sm unified-sim-goto" data-install-id="${escapeHtml(e.installId)}">→ Install</button>`
+          : ""}
+        ${e.stockItemId && !e.installId
+          ? `<button type="button" class="btn btn-secondary btn-sm unified-sim-stock" data-stock-id="${escapeHtml(e.stockItemId)}">→ Stock</button>`
+          : ""}
+      </div>
+    </article>
+  `;
+}
+
+function sourceBadgeHtml(source) {
+  const map = {
+    installed: { label: "📌 In Use", cls: "src-installed" },
+    stock:     { label: "📦 In Stock", cls: "src-stock" },
+    manual:    { label: "📝 Manual", cls: "src-manual" },
+  };
+  const m = map[source] || { label: source, cls: "" };
+  return `<span class="src-badge ${m.cls}">${m.label}</span>`;
+}
+
+function completenessBadgeHtml(c) {
+  if (c === "complete") return `<span class="completeness-badge cb-complete">✓ Complete</span>`;
+  if (c === "needs_primary") return `<span class="completeness-badge cb-needs">⚠️ Needs Primary</span>`;
+  if (c === "needs_secondary") return `<span class="completeness-badge cb-needs">⚠️ Needs Secondary</span>`;
+  return "";
+}
+
+function openUnifiedSimEditor(entryId) {
+  const unified = buildUnifiedSimList();
+  const entry = unified.find((e) => e.id === entryId);
+  if (!entry) return;
+  // If it has a sim record, edit that directly
+  if (entry.simRecordId) {
+    openSimEditor(entry.simRecordId);
+    return;
+  }
+  // Otherwise prompt to promote first
+  promoteToSimDb(entryId);
+}
+
+async function promoteToSimDb(entryId) {
+  const unified = buildUnifiedSimList();
+  const entry = unified.find((e) => e.id === entryId);
+  if (!entry) return;
+  const ok = await showConfirm({
+    title: "Add to SIM Database?",
+    message: `This will create a SIM Database entry for:<br><br>
+              <strong>Primary:</strong> ${escapeHtml(entry.primary || "—")}<br>
+              <strong>Secondary:</strong> ${escapeHtml(entry.secondary || "—")}<br><br>
+              You'll then be able to add/edit either number directly.`,
+    confirmLabel: "+ Add to DB",
+  });
+  if (!ok) return;
+  try {
+    const newSim = {
+      id: crypto.randomUUID(),
+      primaryNumber: entry.primary || "",
+      secondaryNumber: entry.secondary || "",
+      notes: entry.vehicleNo
+        ? `Auto-promoted from installation (${entry.vehicleNo})`
+        : entry.stockProject
+        ? `Auto-promoted from stock (${entry.stockProject})`
+        : "Auto-promoted to SIM DB",
+      createdAt: new Date().toISOString(),
+      createdBy: currentUser || "admin",
+    };
+    const saved = await insertSim(newSim);
+    sims.push(saved);
+    render();
+    showToast("Added to SIM Database. You can now edit.");
+    // Auto-open the editor
+    setTimeout(() => openSimEditor(saved.id), 200);
+  } catch (err) {
+    showToast(err.message || "Failed to add.", true);
+  }
+}
+
+function exportUnifiedSimsToExcel(list) {
+  try {
+    const rows = list.map((e) => ({
+      "Primary (Mobile No)": e.primary || "",
+      "Secondary (ICCID)": e.secondary || "",
+      Status: e.completeness === "complete" ? "Complete" : e.completeness === "needs_primary" ? "Needs Primary" : "Needs Secondary",
+      Sources: e.sources.join(", "),
+      Vehicle: e.vehicleNo || "",
+      "Stock Project": e.stockProject || "",
+      Notes: e.notes || "",
+    }));
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, "Unified SIMs");
+    XLSX.writeFile(wb, `unified-sims-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    showToast("Exported.");
+  } catch (err) {
+    showToast("Export failed: " + err.message, true);
+  }
+}
+
+function _OLD_renderSimDb_v321() {
   if (!simsTableReady) {
     app.innerHTML = `
       ${renderHeader("SIM Database", "Standalone SIM inventory")}
@@ -8991,3 +9563,4 @@ async function initApp() {
 }
 
 initApp();
+
