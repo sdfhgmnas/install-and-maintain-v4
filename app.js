@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.2.4";
+const APP_VERSION = "3.2.8";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -1497,16 +1497,21 @@ function horizontalBarChart(items, opts = {}) {
         .map((it) => {
           const v = Number(it.value || 0);
           const pct = Math.max(2, Math.round((v / max) * 100));
+          const clickable = it.bucket && v > 0;
+          const tag = clickable ? "button" : "div";
+          const cls = clickable ? "hbar-row hbar-row-clickable" : "hbar-row";
+          const dataAttr = clickable ? `data-bucket="${escapeHtml(it.bucket)}" type="button"` : "";
           return `
-            <div class="hbar-row">
+            <${tag} class="${cls}" ${dataAttr} ${clickable ? `aria-label="Show ${v} vehicles in ${escapeHtml(it.label)}"` : ""}>
               <div class="hbar-label" title="${escapeHtml(it.label)}">${escapeHtml(it.label)}</div>
               <div class="hbar-track-row">
                 <div class="hbar-track">
                   <div class="hbar-fill" style="width: ${pct}%; background: ${it.color || "#a78bfa"};"></div>
                 </div>
                 ${showValue ? `<span class="hbar-value">${v}</span>` : ""}
+                ${clickable ? `<span class="hbar-chevron">›</span>` : ""}
               </div>
-            </div>`;
+            </${tag}>`;
         })
         .join("")}
     </div>`;
@@ -4562,21 +4567,29 @@ function renderDashboard() {
       lastRepairByVehicle[inst.vehicleNo] = new Date(inst.createdAt).getTime();
     }
   }
-  const ageBuckets = { ">90": 0, ">60": 0, ">30": 0, ">15": 0, ">7": 0 };
-  for (const v of Object.values(lastRepairByVehicle)) {
-    const days = Math.floor((now - v) / (24 * 60 * 60 * 1000));
-    if (days > 90) ageBuckets[">90"] += 1;
-    else if (days > 60) ageBuckets[">60"] += 1;
-    else if (days > 30) ageBuckets[">30"] += 1;
-    else if (days > 15) ageBuckets[">15"] += 1;
-    else if (days > 7) ageBuckets[">7"] += 1;
+  const ageBuckets = { ">90": [], ">60": [], ">30": [], ">15": [], ">7": [] };
+  for (const [vehicleNo, lastTs] of Object.entries(lastRepairByVehicle)) {
+    const days = Math.floor((now - lastTs) / (24 * 60 * 60 * 1000));
+    const entry = { vehicleNo, lastTs, days };
+    if (days > 90) ageBuckets[">90"].push(entry);
+    else if (days > 60) ageBuckets[">60"].push(entry);
+    else if (days > 30) ageBuckets[">30"].push(entry);
+    else if (days > 15) ageBuckets[">15"].push(entry);
+    else if (days > 7) ageBuckets[">7"].push(entry);
   }
+  // Sort each bucket by oldest (longest inactive) first
+  for (const k in ageBuckets) {
+    ageBuckets[k].sort((a, b) => b.days - a.days);
+  }
+  // Stash for the modal handler
+  window._lastActivityBuckets = ageBuckets;
+
   const ageBars = [
-    { label: "> 90 days", value: ageBuckets[">90"], color: "#0ea5e9" },
-    { label: "> 60 days", value: ageBuckets[">60"], color: "#0ea5e9" },
-    { label: "> 30 days", value: ageBuckets[">30"], color: "#0ea5e9" },
-    { label: "> 15 days", value: ageBuckets[">15"], color: "#0ea5e9" },
-    { label: "> 7 days", value: ageBuckets[">7"], color: "#0ea5e9" },
+    { label: "> 90 days", value: ageBuckets[">90"].length, color: "#dc2626", bucket: ">90" },
+    { label: "> 60 days", value: ageBuckets[">60"].length, color: "#ea580c", bucket: ">60" },
+    { label: "> 30 days", value: ageBuckets[">30"].length, color: "#f59e0b", bucket: ">30" },
+    { label: "> 15 days", value: ageBuckets[">15"].length, color: "#0ea5e9", bucket: ">15" },
+    { label: "> 7 days",  value: ageBuckets[">7"].length,  color: "#10b981", bucket: ">7" },
   ];
 
   // Recent activity feed (top 12 events across installs, repairs, deletions)
@@ -4854,6 +4867,126 @@ function renderDashboard() {
   app.querySelectorAll("[data-go]").forEach((btn) => {
     btn.addEventListener("click", () => setView(btn.dataset.go));
   });
+  // Wire up clickable activity bars
+  app.querySelectorAll(".hbar-row-clickable").forEach((bar) => {
+    bar.addEventListener("click", () => {
+      const bucket = bar.dataset.bucket;
+      openLastActivityBucketModal(bucket);
+    });
+  });
+}
+
+function openLastActivityBucketModal(bucket) {
+  const buckets = window._lastActivityBuckets || {};
+  const items = buckets[bucket] || [];
+  const labels = {
+    ">90": { title: "Vehicles inactive > 90 days", color: "#dc2626", icon: "🔴" },
+    ">60": { title: "Vehicles inactive > 60 days", color: "#ea580c", icon: "🟠" },
+    ">30": { title: "Vehicles inactive > 30 days", color: "#f59e0b", icon: "🟡" },
+    ">15": { title: "Vehicles inactive > 15 days", color: "#0ea5e9", icon: "🔵" },
+    ">7":  { title: "Vehicles inactive > 7 days",  color: "#10b981", icon: "🟢" },
+  };
+  const meta = labels[bucket] || labels[">7"];
+
+  const allInstalls = loadInstallations();
+  const installByVehicle = {};
+  for (const i of allInstalls) installByVehicle[i.vehicleNo] = i;
+
+  modal.innerHTML = `
+    <h3 style="margin:0 0 0.3rem; display:flex; align-items:center; gap:0.5rem;">
+      <span>${meta.icon}</span>
+      <span style="flex:1;">${escapeHtml(meta.title)}</span>
+      <span style="font-size:0.85rem; color:${meta.color}; font-weight:800;">${items.length}</span>
+    </h3>
+    <p class="modal-desc">Sorted by longest inactive first. Tap a vehicle to view its installation.</p>
+
+    ${items.length === 0 ? `
+      <div class="entry-empty">
+        <div class="entry-empty-icon">✅</div>
+        <h3>No vehicles in this range</h3>
+        <p>All clear here.</p>
+      </div>
+    ` : `
+      <div class="bucket-vehicle-list">
+        ${items.map((it) => {
+          const inst = installByVehicle[it.vehicleNo];
+          const imei = inst ? (getCurrentImei(inst) || "—") : "—";
+          const sim = inst ? (getCurrentSim(inst) || "—") : "—";
+          const lastDate = new Date(it.lastTs);
+          const lastStr = lastDate.toLocaleDateString("en-IN", {
+            day: "2-digit", month: "short", year: "numeric",
+          });
+          const tail = (s, n = 6) => {
+            const v = String(s || "");
+            return v.length > n ? "…" + v.slice(-n) : v || "—";
+          };
+          return `
+            <article class="bucket-vehicle-item" data-vehicle="${escapeHtml(it.vehicleNo)}" tabindex="0">
+              <div class="bucket-vehicle-head">
+                <span class="bucket-vehicle-pill" style="background:${meta.color}15; color:${meta.color}; border-color:${meta.color}30;">
+                  🚛 ${escapeHtml(it.vehicleNo)}
+                </span>
+                <span class="bucket-vehicle-days" style="color:${meta.color};">
+                  ${it.days}d
+                </span>
+              </div>
+              <div class="bucket-vehicle-meta">
+                <span>📡 ${escapeHtml(tail(imei, 8))}</span>
+                <span>📶 ${escapeHtml(tail(sim, 8))}</span>
+              </div>
+              <div class="bucket-vehicle-foot">
+                <span>📅 Last activity: <strong>${escapeHtml(lastStr)}</strong></span>
+              </div>
+            </article>
+          `;
+        }).join("")}
+      </div>
+    `}
+
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Close</button>
+      ${items.length > 0 ? `<button type="button" class="btn btn-primary" data-act="export">↓ Export CSV</button>` : ""}
+    </div>
+  `;
+  modalOverlay.classList.remove("hidden");
+
+  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+  modal.querySelector('[data-act="export"]')?.addEventListener("click", () => {
+    exportBucketAsCsv(bucket, items, installByVehicle);
+  });
+
+  // Click vehicle → navigate to installations + search filter
+  modal.querySelectorAll(".bucket-vehicle-item").forEach((el) => {
+    el.addEventListener("click", () => {
+      const v = el.dataset.vehicle;
+      closeModal();
+      searchQuery = v;
+      setView("installations");
+    });
+  });
+}
+
+function exportBucketAsCsv(bucket, items, installByVehicle) {
+  const labels = {
+    ">90": "over_90_days", ">60": "over_60_days", ">30": "over_30_days",
+    ">15": "over_15_days", ">7": "over_7_days",
+  };
+  const rows = [["Vehicle No", "IMEI", "SIM", "Last Activity Date", "Days Inactive"]];
+  for (const it of items) {
+    const inst = installByVehicle[it.vehicleNo];
+    const imei = inst ? (getCurrentImei(inst) || "") : "";
+    const sim = inst ? (getCurrentSim(inst) || "") : "";
+    const d = new Date(it.lastTs).toISOString().slice(0, 10);
+    rows.push([it.vehicleNo, imei, sim, d, it.days]);
+  }
+  const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `inactive-${labels[bucket] || "vehicles"}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 /* ---------------- Page 2: Installations ---------------- */
@@ -6364,20 +6497,30 @@ function renderStockPage() {
                   return v.length > n ? "…" + v.slice(-n) : v || "—";
                 };
                 const imei = item.metadata?.imei || "";
+                const project = item.metadata?.project || "";
+                const needsSupplier = item.metadata?.needsSupplier && !item.supplier;
                 return `
-                  <article class="tk-card ${low ? "tk-card-warn" : ""}">
+                  <article class="tk-card ${low ? "tk-card-warn" : ""} ${needsSupplier ? "tk-card-needs-supplier" : ""}">
                     <div class="tk-card-head">
                       <span class="tk-pill">${escapeHtml(item.name)}</span>
                       <span class="tk-chip ${low ? "tk-chip-deleted" : "tk-chip-install"}" style="text-decoration:none;">
                         ${fmtQty(item.quantity)} ${escapeHtml(item.unit)}${low ? " · LOW" : ""}
                       </span>
                     </div>
+                    ${needsSupplier ? `<div class="needs-supplier-banner">⚠️ Needs supplier — admin please fill</div>` : ""}
                     <div class="tk-stats">
                       ${item.category ? `
                         <div class="tk-stat">
                           <span class="tk-stat-icon">🏷️</span>
                           <span class="tk-stat-label">Category:</span>
                           <span class="tk-stat-value">${escapeHtml(item.category)}</span>
+                        </div>
+                      ` : ""}
+                      ${project ? `
+                        <div class="tk-stat">
+                          <span class="tk-stat-icon">📁</span>
+                          <span class="tk-stat-label">Project:</span>
+                          <span class="tk-stat-value">${escapeHtml(project)}</span>
                         </div>
                       ` : ""}
                       ${item.supplier ? `
@@ -8110,16 +8253,27 @@ let _bulkScanState = {
 };
 
 function openBulkStockAdd() {
+  const isAdmin = currentUser === "admin";
   const categories = [...new Set(stockItems.map((s) => s.category).filter(Boolean))];
   const supplierOptions = suppliers.map((s) => `<option value="${escapeHtml(s.name)}"></option>`).join("");
   const categoryOptions = [...new Set([
     ...stockCategories.map((c) => c.name),
     ...categories,
   ])].map((c) => `<option value="${escapeHtml(c)}"></option>`).join("");
+  // Projects sourced from accounts + existing stock metadata
+  const projectList = [...new Set([
+    ...accountsTransactions.map((t) => t.projectName).filter(Boolean),
+    ...stockItems.map((s) => s.metadata?.project).filter(Boolean),
+  ])];
+  const projectOptions = projectList.map((p) => `<option value="${escapeHtml(p)}"></option>`).join("");
 
   modal.innerHTML = `
     <h3>📦 Add Stock Items — Step 1 of 2</h3>
-    <p class="modal-desc">Enter item details + what kind of code each unit has.</p>
+    <p class="modal-desc">
+      ${isAdmin
+        ? "Enter item details + what kind of code each unit has."
+        : "Item details daalo. Supplier admin baad me add karega."}
+    </p>
     <div class="form-grid">
       <div class="field full-width">
         <label for="bulkItemName">Item Name <span class="required">*</span></label>
@@ -8130,11 +8284,19 @@ function openBulkStockAdd() {
         <input type="text" id="bulkItemCategory" list="bulkCatList" placeholder="e.g. GPS, SIM-JIO, Sensor" autocomplete="off" />
         <datalist id="bulkCatList">${categoryOptions}</datalist>
       </div>
-      <div class="field">
-        <label for="bulkItemSupplier">Supplier</label>
-        <input type="text" id="bulkItemSupplier" list="bulkSupList" placeholder="Supplier name" autocomplete="off" />
-        <datalist id="bulkSupList">${supplierOptions}</datalist>
-      </div>
+      ${isAdmin ? `
+        <div class="field">
+          <label for="bulkItemSupplier">Supplier</label>
+          <input type="text" id="bulkItemSupplier" list="bulkSupList" placeholder="Supplier name" autocomplete="off" />
+          <datalist id="bulkSupList">${supplierOptions}</datalist>
+        </div>
+      ` : `
+        <div class="field">
+          <label for="bulkItemProject">Project <span class="required">*</span></label>
+          <input type="text" id="bulkItemProject" list="bulkProjList" placeholder="e.g. Bandol, STAREX, Harrai" autocomplete="off" />
+          <datalist id="bulkProjList">${projectOptions}</datalist>
+        </div>
+      `}
       <div class="field full-width">
         <label>What code will you scan?</label>
         <div class="seg-control" id="bulkCodeType">
@@ -8186,14 +8348,23 @@ function openBulkStockAdd() {
   modal.querySelector('[data-act="continue"]').onclick = () => {
     const name = document.getElementById("bulkItemName").value.trim();
     const category = document.getElementById("bulkItemCategory").value.trim() || "Uncategorized";
-    const supplier = document.getElementById("bulkItemSupplier").value.trim() || "";
+    const supplier = isAdmin
+      ? (document.getElementById("bulkItemSupplier").value.trim() || "")
+      : ""; // Abhinav doesn't enter supplier — admin fills later
+    const project = !isAdmin
+      ? (document.getElementById("bulkItemProject").value.trim() || "")
+      : "";
     if (!name) {
       showToast("Please enter item name.", true);
       return;
     }
+    if (!isAdmin && !project) {
+      showToast("Project zaroori hai. Konsa project ke liye stock hai?", true);
+      return;
+    }
     _bulkScanState = {
       active: true,
-      meta: { name, category, supplier, codeType: _codeType },
+      meta: { name, category, supplier, project, codeType: _codeType },
       scanned: [],
       scanner: null,
     };
@@ -8685,6 +8856,9 @@ async function saveBulkStockItems() {
   try {
     const newItems = [];
     for (const imei of imeis) {
+      const metadata = { imei };
+      if (meta.project) metadata.project = meta.project;
+      if (!meta.supplier) metadata.needsSupplier = true; // flag for admin review
       const item = {
         id: "stock-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8),
         name: meta.name,
@@ -8693,10 +8867,12 @@ async function saveBulkStockItems() {
         quantity: 1,
         unit: "unit",
         lowStockThreshold: 1,
-        metadata: { imei },
+        metadata,
         createdAt: new Date().toISOString(),
         createdBy: currentUser,
-        notes: `Bulk-added with ${imeis.length - 1} other unit${imeis.length > 2 ? "s" : ""}`,
+        notes: meta.project
+          ? `Project: ${meta.project} · Bulk-added with ${imeis.length - 1} other unit${imeis.length > 2 ? "s" : ""}`
+          : `Bulk-added with ${imeis.length - 1} other unit${imeis.length > 2 ? "s" : ""}`,
       };
       const saved = await insertStockItem(item);
       newItems.push(saved);
@@ -8752,3 +8928,4 @@ async function initApp() {
 }
 
 initApp();
+
