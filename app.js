@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.2.10";
+const APP_VERSION = "3.2.11";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -6244,9 +6244,9 @@ function stockMetadataSummary(item) {
   if (kind === "gps" && m.imei) return `IMEI: ${m.imei}`;
   if (kind === "sim") {
     const p = m.primary || "";
-    const s = m.secondary || "";
+    const s = m.secondary || m.imei || ""; // fallback: bulk-scanned ICCIDs land in m.imei
     if (p && s) return `${p} · ${s}`;
-    if (s) return `ICCID: ${s}`;
+    if (s) return `SIM NO: ${s}`;
     if (p) return `Primary: ${p}`;
   }
   if (kind === "sensor") {
@@ -6256,7 +6256,37 @@ function stockMetadataSummary(item) {
     if (sn) return `Sensor: ${sn}`;
     if (mac) return `MAC: ${mac}`;
   }
+  // Fallback: any scanned imei in non-categorized items
+  if (m.imei) return `Code: ${m.imei}`;
   return "";
+}
+
+/**
+ * Returns the primary copyable value for an item (the one user wants to copy most).
+ * GPS → IMEI, SIM → ICCID (scanned), Sensor → sensor no, etc.
+ * Returns { value, label } or null.
+ */
+function stockCopyableValue(item) {
+  const kind = categoryKind(item.category);
+  const m = item.metadata || {};
+  if (kind === "gps" && m.imei) return { value: m.imei, label: "IMEI" };
+  if (kind === "sim") {
+    const iccid = m.secondary || m.imei || "";
+    if (iccid) return { value: iccid, label: "SIM NO" };
+    if (m.primary) return { value: m.primary, label: "Primary" };
+  }
+  if (kind === "sensor") {
+    if (m.sensorNo) return { value: m.sensorNo, label: "Sensor" };
+    if (m.macId) return { value: m.macId, label: "MAC" };
+  }
+  if (m.imei) return { value: m.imei, label: "Code" };
+  return null;
+}
+
+/** Renders an inline copy button HTML next to the value. */
+function stockCopyBtn(value, label) {
+  if (!value) return "";
+  return `<button type="button" class="stock-copy-btn" data-copy="${escapeHtml(value)}" data-label="${escapeHtml(label || "Value")}" aria-label="Copy ${escapeHtml(label || "value")}" title="Copy ${escapeHtml(value)}">⎘</button>`;
 }
 
 function renderStockPage() {
@@ -6420,11 +6450,12 @@ function renderStockPage() {
                 .join(" ")
             : `<span class="muted">—</span>`;
           const metaSummary = stockMetadataSummary(item);
+          const copyable = stockCopyableValue(item);
           return `
             <tr class="${low ? "stock-row-low" : ""}">
               <td>
                 <div class="stock-name">${escapeHtml(item.name)}${low ? ` <span class="low-pill">Low stock</span>` : ""}</div>
-                ${metaSummary ? `<div class="stock-meta mono">${escapeHtml(metaSummary)}</div>` : ""}
+                ${metaSummary ? `<div class="stock-meta mono">${escapeHtml(metaSummary)}${copyable ? ` ${stockCopyBtn(copyable.value, copyable.label)}` : ""}</div>` : ""}
                 ${item.notes ? `<div class="stock-notes">${escapeHtml(item.notes.split("\n")[0])}</div>` : ""}
               </td>
               <td>${item.category ? `<span class="cat-pill">${escapeHtml(item.category)}</span>` : `<span class="muted">—</span>`}</td>
@@ -6499,6 +6530,7 @@ function renderStockPage() {
                 const imei = item.metadata?.imei || "";
                 const project = item.metadata?.project || "";
                 const needsSupplier = item.metadata?.needsSupplier && !item.supplier;
+                const copyable = stockCopyableValue(item);
                 return `
                   <article class="tk-card ${low ? "tk-card-warn" : ""} ${needsSupplier ? "tk-card-needs-supplier" : ""}">
                     <div class="tk-card-head">
@@ -6530,18 +6562,12 @@ function renderStockPage() {
                           <span class="tk-stat-value">${escapeHtml(item.supplier)}</span>
                         </div>
                       ` : ""}
-                      ${imei ? `
-                        <div class="tk-stat tk-stat-full">
-                          <span class="tk-stat-icon">📡</span>
-                          <span class="tk-stat-label">IMEI:</span>
-                          <span class="tk-stat-value">${escapeHtml(tail(imei, 10))}</span>
-                        </div>
-                      ` : ""}
-                      ${metaSummary && !imei ? `
-                        <div class="tk-stat tk-stat-full">
-                          <span class="tk-stat-icon">ℹ️</span>
-                          <span class="tk-stat-label">Meta:</span>
-                          <span class="tk-stat-value" style="white-space:normal;">${escapeHtml(metaSummary)}</span>
+                      ${copyable ? `
+                        <div class="tk-stat tk-stat-full stock-copyable-row">
+                          <span class="tk-stat-icon">${copyable.label === "IMEI" ? "📡" : copyable.label === "SIM NO" ? "📶" : "🔢"}</span>
+                          <span class="tk-stat-label">${escapeHtml(copyable.label)}:</span>
+                          <span class="tk-stat-value mono">${escapeHtml(copyable.value)}</span>
+                          ${stockCopyBtn(copyable.value, copyable.label)}
                         </div>
                       ` : ""}
                     </div>
@@ -6621,6 +6647,41 @@ function renderStockPage() {
   document.getElementById("exportStockBtn")?.addEventListener("click", exportStockToExcel);
   app.querySelectorAll(".stock-edit").forEach((btn) => {
     btn.addEventListener("click", () => openStockEditor(btn.dataset.id, allCategoryOptions));
+  });
+  // Copy IMEI/SIM NO buttons
+  app.querySelectorAll(".stock-copy-btn").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const value = btn.dataset.copy;
+      const label = btn.dataset.label || "Value";
+      try {
+        await navigator.clipboard.writeText(value);
+        showToast(`✓ ${label} copied: ${value.length > 14 ? value.slice(0, 6) + "…" + value.slice(-6) : value}`);
+        // Visual feedback on button
+        const orig = btn.textContent;
+        btn.textContent = "✓";
+        btn.classList.add("stock-copy-done");
+        setTimeout(() => {
+          btn.textContent = orig;
+          btn.classList.remove("stock-copy-done");
+        }, 1200);
+      } catch (err) {
+        // Fallback for older browsers / non-secure context
+        const ta = document.createElement("textarea");
+        ta.value = value;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          document.execCommand("copy");
+          showToast(`✓ ${label} copied`);
+        } catch (e2) {
+          showToast("Failed to copy. Try long-press → Copy.", true);
+        }
+        document.body.removeChild(ta);
+      }
+    });
   });
   app.querySelectorAll(".stock-delete").forEach((btn) => {
     btn.addEventListener("click", () => onDeleteStockItem(btn.dataset.id));
