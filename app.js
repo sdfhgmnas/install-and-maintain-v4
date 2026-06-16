@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.3.1";
+const APP_VERSION = "3.4.0";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -162,7 +162,7 @@ async function auditDeletion({ entityType, entityId, entityLabel, reason, snapsh
    ============================================================ */
 
 async function consumeStockFor(identifiers, link) {
-  if (!stockItemsTableReady) return;
+  if (!stockItemsTableReady) return { consumed: [] };
   const seen = new Set();
   const candidates = [];
 
@@ -179,6 +179,7 @@ async function consumeStockFor(identifiers, link) {
 
   if (identifiers.imei) {
     const v = String(identifiers.imei).trim().toLowerCase();
+    // Match metadata.imei (GPS items) — both lookup fields use it
     matchBy((it) => (it.metadata?.imei || "").toLowerCase() === v);
   }
   if (identifiers.simSecondary) {
@@ -186,7 +187,18 @@ async function consumeStockFor(identifiers, link) {
     matchBy(
       (it) =>
         (it.metadata?.secondary || "").toLowerCase() === v ||
-        (it.metadata?.primary || "").toLowerCase() === v
+        (it.metadata?.primary || "").toLowerCase() === v ||
+        // FALLBACK: bulk-scanned SIM ICCIDs land in metadata.imei
+        // (only match this for SIM-category items to avoid GPS IMEI false positives)
+        ((categoryKind(it.category) === "sim") && (it.metadata?.imei || "").toLowerCase() === v)
+    );
+  }
+  if (identifiers.simPrimary) {
+    const v = String(identifiers.simPrimary).trim().toLowerCase();
+    matchBy(
+      (it) =>
+        (it.metadata?.primary || "").toLowerCase() === v ||
+        (it.metadata?.secondary || "").toLowerCase() === v
     );
   }
   if (identifiers.sensorNo) {
@@ -198,10 +210,19 @@ async function consumeStockFor(identifiers, link) {
     matchBy((it) => (it.metadata?.macId || "").toLowerCase() === v);
   }
 
+  const consumed = [];
   for (const it of candidates) {
     const next = it.quantity - 1;
     try {
-      await updateStockItem({ ...it, quantity: next });
+      // Mark used in metadata for traceability
+      const newMeta = {
+        ...(it.metadata || {}),
+        usedInVehicle: link.vehicleNo || null,
+        usedAt: new Date().toISOString(),
+        usedInInstallation: link.installationId || null,
+      };
+      await updateStockItem({ ...it, quantity: next, metadata: newMeta });
+      consumed.push({ name: it.name, vehicle: link.vehicleNo });
       if (stockTxTableReady) {
         try {
           await insertStockTransaction({
@@ -223,6 +244,7 @@ async function consumeStockFor(identifiers, link) {
       console.warn("Auto-consume failed for stock item", it.name, err);
     }
   }
+  return { consumed };
 }
 
 /**
@@ -2056,9 +2078,45 @@ function getMaintenanceStatus(record) {
   return `<span class="badge badge-warn">${pending.length} action${pending.length === 1 ? "" : "s"} pending</span>`;
 }
 
-function setView(next) {
+function setView(next, skipHistory = false) {
   view = next;
+  if (!skipHistory) {
+    try {
+      history.pushState({ view: next, modalOpen: false }, "", "#" + encodeURIComponent(next));
+    } catch (e) {}
+  }
   render();
+}
+
+/**
+ * Browser back button handler — closes modal first, else navigates back.
+ * Lets Android hardware back / browser back behave naturally.
+ */
+function handlePopState(e) {
+  // If modal is open, close it instead of navigating
+  if (modalOverlay && !modalOverlay.classList.contains("hidden")) {
+    closeModal();
+    // Push state again to maintain history at current view
+    try {
+      history.pushState({ view, modalOpen: false }, "", "#" + encodeURIComponent(view));
+    } catch (er) {}
+    return;
+  }
+  // Else navigate to previous view (or logout if none)
+  const targetView = (e.state && e.state.view) || null;
+  if (targetView && targetView !== view) {
+    view = targetView;
+    render();
+  } else if (!targetView && currentUser) {
+    // No state — go to default landing
+    view = (typeof userCanAccessPage === "function" && currentUser !== "admin" && currentUser !== "akash")
+      ? null
+      : (currentUser === "akash" ? "akash-home" : "dashboard");
+    if (view) {
+      try { history.replaceState({ view }, "", "#" + encodeURIComponent(view)); } catch {}
+      render();
+    }
+  }
 }
 
 async function logout() {
@@ -2067,6 +2125,7 @@ async function logout() {
   view = "login";
   searchQuery = "";
   lastSyncedAt = null;
+  try { history.replaceState({ view: "login" }, "", "#login"); } catch {}
   render();
 }
 
@@ -3149,9 +3208,10 @@ function handleInstallSubmit(gpsType = "FMB") {
 
       const saved = await insertInstallation(newInstall);
       // Auto-consume matching stock entries.
-      await consumeStockFor(
+      const consumeResult = await consumeStockFor(
         {
           imei: data.imei,
+          simPrimary: data.sim,
           simSecondary: enteredIccid,
           sensorNo: data.sensor,
           macId: data.mac,
@@ -3163,7 +3223,12 @@ function handleInstallSubmit(gpsType = "FMB") {
         }
       );
       await refreshAllData();
-      showToast("Installation saved successfully!");
+      const consumedCount = consumeResult?.consumed?.length || 0;
+      if (consumedCount > 0) {
+        showToast(`✓ Installation saved! Auto-linked ${consumedCount} stock item${consumedCount > 1 ? "s" : ""}.`);
+      } else {
+        showToast("Installation saved successfully!");
+      }
       setView("akash-home");
       return true;
     }
@@ -3458,9 +3523,10 @@ function renderRepairForm() {
       await updateInstallation(updatedInst);
       const savedRecord = await insertMaintenanceRecord(newRecord);
       // Auto-consume newly-used stock entries.
-      await consumeStockFor(
+      const consumeResult = await consumeStockFor(
         {
           imei: deviceChange ? newImei : null,
+          simPrimary: simChange ? newSim : null,
           simSecondary: simChange ? newSim : null,
         },
         {
@@ -3471,7 +3537,12 @@ function renderRepairForm() {
         }
       );
       await refreshAllData();
-      showToast("Repair work saved successfully!");
+      const consumedCount = consumeResult?.consumed?.length || 0;
+      if (consumedCount > 0) {
+        showToast(`✓ Repair saved! Auto-linked ${consumedCount} stock item${consumedCount > 1 ? "s" : ""}.`);
+      } else {
+        showToast("Repair work saved successfully!");
+      }
       setView("akash-home");
     } catch (err) {
       showToast(err.message || "Failed to save repair work.", true);
@@ -5816,9 +5887,13 @@ function buildUnifiedSimList() {
     const hasS = !!e.secondary;
     e.hasPrimary = hasP;
     e.hasSecondary = hasS;
-    e.completeness = hasP && hasS ? "complete" : hasP ? "needs_secondary" : "needs_primary";
     // Smart swap detection: 89... in primary slot OR mobile-no in secondary slot
     e.looksSwapped = pairLooksSwapped(e.primary, e.secondary);
+    // Completeness — but swap-needed overrides "complete"
+    if (!hasP) e.completeness = "needs_primary";
+    else if (!hasS) e.completeness = "needs_secondary";
+    else if (e.looksSwapped) e.completeness = "swap_needed";
+    else e.completeness = "complete";
     return e;
   });
 }
@@ -5866,14 +5941,9 @@ function renderSimDb() {
     filtered = filtered.filter((e) => e.sources.includes("manual"));
   }
 
-  // Apply completeness filter
+  // Apply completeness filter (includes swap_needed)
   if (simCompletenessFilter !== "all") {
     filtered = filtered.filter((e) => e.completeness === simCompletenessFilter);
-  }
-
-  // Apply "show only swapped" temp filter (from Review List action)
-  if (window._showOnlySwapped) {
-    filtered = filtered.filter((e) => e.looksSwapped);
   }
 
   // Apply search
@@ -5888,11 +5958,11 @@ function renderSimDb() {
     );
   }
 
-  // Sort: incomplete first (needs_primary, needs_secondary), then complete; within each, newest first
+  // Sort: incomplete first, then swap_needed, then complete; newest first within each
   filtered.sort((a, b) => {
-    const order = { needs_primary: 0, needs_secondary: 1, complete: 2 };
-    const oa = order[a.completeness] || 99;
-    const ob = order[b.completeness] || 99;
+    const order = { needs_primary: 0, needs_secondary: 1, swap_needed: 2, complete: 3 };
+    const oa = order[a.completeness] ?? 99;
+    const ob = order[b.completeness] ?? 99;
     if (oa !== ob) return oa - ob;
     return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
   });
@@ -5995,12 +6065,13 @@ function renderSimDb() {
             <span class="sim-filter-label">Status:</span>
             <select id="simCompletenessFilter">
               <option value="all" ${simCompletenessFilter === "all" ? "selected" : ""}>All status</option>
+              <option value="swap_needed" ${simCompletenessFilter === "swap_needed" ? "selected" : ""}>↔ Swap needed (${stats.swapped})</option>
               <option value="needs_primary" ${simCompletenessFilter === "needs_primary" ? "selected" : ""}>⚠️ Needs primary (${stats.needsPrimary})</option>
               <option value="needs_secondary" ${simCompletenessFilter === "needs_secondary" ? "selected" : ""}>⚠️ Needs secondary (${stats.needsSecondary})</option>
               <option value="complete" ${simCompletenessFilter === "complete" ? "selected" : ""}>✓ Complete (${stats.complete})</option>
             </select>
           </label>
-          ${(simSourceFilter !== "all" || simCompletenessFilter !== "all" || simDbQuery || window._showOnlySwapped) ? `
+          ${(simSourceFilter !== "all" || simCompletenessFilter !== "all" || simDbQuery) ? `
             <button type="button" class="btn btn-secondary btn-sm" id="clearSimFilters">✕ Clear filters</button>
           ` : ""}
         </div>
@@ -6061,21 +6132,18 @@ function renderSimDb() {
     simSourceFilter = "all";
     simCompletenessFilter = "all";
     simDbQuery = "";
-    window._showOnlySwapped = false;
     render();
   });
   document.getElementById("addSimBtn")?.addEventListener("click", () => openSimEditor(null));
   document.getElementById("exportUnifiedSimsBtn")?.addEventListener("click", () => exportUnifiedSimsToExcel(filtered));
   document.getElementById("bulkSwapBtn")?.addEventListener("click", () => openBulkSwapModal());
   document.getElementById("reviewSwapsBtn")?.addEventListener("click", () => {
-    // Filter to only show swapped entries
-    simCompletenessFilter = "all";
+    simCompletenessFilter = "swap_needed";
     simSourceFilter = "all";
     simDbQuery = "";
-    // Use a special flag to filter swapped — add temp filter
-    window._showOnlySwapped = true;
+    window._showOnlySwapped = false;
     render();
-    showToast(`Showing ${stats.swapped} SIM${stats.swapped === 1 ? "" : "s"} flagged for swap.`);
+    showToast(`Showing ${stats.swapped} SIM${stats.swapped === 1 ? "" : "s"} that need swapping.`);
   });
 
   // Wire up row/card actions
@@ -6100,6 +6168,10 @@ function renderSimDb() {
   });
   app.querySelectorAll(".unified-sim-promote").forEach((btn) => {
     btn.addEventListener("click", () => promoteToSimDb(btn.dataset.entryId));
+  });
+  // Per-row individual swap
+  app.querySelectorAll(".unified-sim-swap").forEach((btn) => {
+    btn.addEventListener("click", () => swapSingleEntry(btn.dataset.entryId));
   });
 
   // Click row also opens edit
@@ -6147,6 +6219,9 @@ function renderUnifiedSimRow(e) {
       <td>${sourceBadges}</td>
       <td>${useCtx}</td>
       <td class="row-actions">
+        ${e.looksSwapped
+          ? `<button type="button" class="btn btn-warn btn-sm unified-sim-swap" data-entry-id="${escapeHtml(e.id)}" title="Swap primary & secondary">↔ Swap</button>`
+          : ""}
         ${e.simRecordId
           ? `<button type="button" class="btn btn-outline btn-sm unified-sim-edit" data-entry-id="${escapeHtml(e.id)}">✎ Edit</button>`
           : `<button type="button" class="btn btn-primary btn-sm unified-sim-promote" data-entry-id="${escapeHtml(e.id)}" title="Add to SIM DB so you can edit primary/secondary">+ To DB</button>`}
@@ -6214,6 +6289,9 @@ function renderUnifiedSimCard(e) {
         ` : ""}
       </div>
       <div class="tk-actions">
+        ${e.looksSwapped
+          ? `<button type="button" class="btn btn-warn btn-sm unified-sim-swap" data-entry-id="${escapeHtml(e.id)}">↔ Swap</button>`
+          : ""}
         ${e.simRecordId
           ? `<button type="button" class="btn btn-outline btn-sm unified-sim-edit" data-entry-id="${escapeHtml(e.id)}">✎ Edit</button>`
           : `<button type="button" class="btn btn-primary btn-sm unified-sim-promote" data-entry-id="${escapeHtml(e.id)}">+ To SIM DB</button>`}
@@ -6240,6 +6318,7 @@ function sourceBadgeHtml(source) {
 
 function completenessBadgeHtml(c) {
   if (c === "complete") return `<span class="completeness-badge cb-complete">✓ Complete</span>`;
+  if (c === "swap_needed") return `<span class="completeness-badge cb-swap">↔ Swap Needed</span>`;
   if (c === "needs_primary") return `<span class="completeness-badge cb-needs">⚠️ Needs Primary</span>`;
   if (c === "needs_secondary") return `<span class="completeness-badge cb-needs">⚠️ Needs Secondary</span>`;
   return "";
@@ -6292,6 +6371,35 @@ async function promoteToSimDb(entryId) {
     setTimeout(() => openSimEditor(saved.id), 200);
   } catch (err) {
     showToast(err.message || "Failed to add.", true);
+  }
+}
+
+async function swapSingleEntry(entryId) {
+  const unified = buildUnifiedSimList();
+  const entry = unified.find((e) => e.id === entryId);
+  if (!entry || !entry.looksSwapped) return;
+  const tail = (s) => {
+    const v = String(s || "");
+    return v.length > 16 ? "…" + v.slice(-14) : v;
+  };
+  const ok = await showConfirm({
+    title: "Swap primary & secondary?",
+    message: `Current:<br>
+              <strong>Primary:</strong> <code>${escapeHtml(entry.primary)}</code><br>
+              <strong>Secondary:</strong> <code>${escapeHtml(entry.secondary)}</code><br><br>
+              After swap:<br>
+              <strong>Primary:</strong> <code>${escapeHtml(entry.secondary)}</code><br>
+              <strong>Secondary:</strong> <code>${escapeHtml(entry.primary)}</code>`,
+    confirmLabel: "↔ Confirm Swap",
+  });
+  if (!ok) return;
+  try {
+    await applySwap(entry);
+    await refreshAllData();
+    render();
+    showToast("✓ Swapped successfully.");
+  } catch (err) {
+    showToast(err.message || "Swap failed.", true);
   }
 }
 
@@ -7039,6 +7147,86 @@ function rankItemSuggestions(query, excludeId = null) {
 }
 
 // Render a short summary line for an item's metadata (for the table row).
+/**
+ * Searches across stockItems, installations, and sims table for any record
+ * containing the given code (IMEI / ICCID / mobile). Returns first match.
+ * Used by the bulk scanner to prevent duplicate entries.
+ */
+function findExistingCode(value) {
+  const norm = String(value || "").trim();
+  if (!norm) return null;
+
+  // 1) Stock items — check metadata.imei, metadata.secondary, metadata.primary, metadata.macId
+  for (const item of stockItems) {
+    const m = item.metadata || {};
+    if (m.imei === norm || m.secondary === norm || m.primary === norm || m.macId === norm) {
+      const where = m.imei === norm ? "IMEI" : m.secondary === norm ? "Secondary" : m.primary === norm ? "Primary" : "MAC";
+      return {
+        source: "stock",
+        label: `Already in Stock as ${item.name} (${where})`,
+        item,
+      };
+    }
+  }
+
+  // 2) Installations — check current IMEI, current SIM, secondary SIM, plus history
+  for (const inst of installations) {
+    const currentImei = getCurrentImei(inst) || "";
+    const currentSim = getCurrentSim(inst) || "";
+    const secondary = inst.secondarySim || "";
+    if (currentImei === norm) {
+      return {
+        source: "install",
+        label: `Already installed in ${inst.vehicleNo} (current IMEI)`,
+        install: inst,
+      };
+    }
+    if (currentSim === norm) {
+      return {
+        source: "install",
+        label: `Already used in ${inst.vehicleNo} (Primary SIM)`,
+        install: inst,
+      };
+    }
+    if (secondary === norm) {
+      return {
+        source: "install",
+        label: `Already used in ${inst.vehicleNo} (Secondary SIM)`,
+        install: inst,
+      };
+    }
+    // Also check history
+    if ((inst.imeiHistory || []).includes(norm)) {
+      return {
+        source: "install_history",
+        label: `Previously used in ${inst.vehicleNo} (old IMEI)`,
+        install: inst,
+      };
+    }
+    if ((inst.simHistory || []).includes(norm)) {
+      return {
+        source: "install_history",
+        label: `Previously used in ${inst.vehicleNo} (old SIM)`,
+        install: inst,
+      };
+    }
+  }
+
+  // 3) Manual SIM DB
+  for (const sim of sims) {
+    if (sim.primaryNumber === norm || sim.secondaryNumber === norm) {
+      const where = sim.primaryNumber === norm ? "Primary" : "Secondary";
+      return {
+        source: "sim_db",
+        label: `Already in SIM Database (${where})`,
+        sim,
+      };
+    }
+  }
+
+  return null;
+}
+
 function stockMetadataSummary(item) {
   const kind = categoryKind(item.category);
   const m = item.metadata || {};
@@ -9431,12 +9619,30 @@ function openBulkScanModal() {
     if (value === lastScannedCode && (now - lastScanTime) < 1000) return;
     lastScannedCode = value;
     lastScanTime = now;
+
+    // Check within current scan session
     if (_bulkScanState.scanned.includes(value)) {
       playBeep(400, 0.12);
-      setStatus(`⚠️ ${value.slice(-6)} already scanned`);
+      setStatus(`⚠️ ${value.slice(-6)} already scanned in this session`);
       try { navigator.vibrate && navigator.vibrate([30, 50, 30]); } catch {}
+      flashScanReject();
       return;
     }
+
+    // Check across global data (stock + installations + sims) — prevent duplicates
+    const existing = findExistingCode(value);
+    if (existing) {
+      if (value === lastRejectedCode && (now - lastRejectedTime) < 2000) return;
+      lastRejectedCode = value;
+      lastRejectedTime = now;
+      playBeep(220, 0.25); // longer low buzz = rejected harder
+      try { navigator.vibrate && navigator.vibrate([80, 60, 80, 60, 80]); } catch {}
+      const shortV = value.length > 12 ? value.slice(0, 6) + "…" + value.slice(-6) : value;
+      setStatus(`❌ Duplicate! "${shortV}" — ${existing.label}`);
+      flashScanReject();
+      return;
+    }
+
     _bulkScanState.scanned.push(value);
     updateUI();
     playBeep(880, 0.08); // high beep = success
@@ -9759,11 +9965,118 @@ async function saveBulkStockItems() {
 }
 
 
+/* ============================================================
+   Pull-to-refresh — native gesture support
+   ============================================================ */
+function setupPullToRefresh() {
+  let pullStartY = 0;
+  let pullCurrentY = 0;
+  let isPulling = false;
+  let isRefreshing = false;
+  const pullThreshold = 75;
+  let indicator = null;
+
+  function ensureIndicator() {
+    if (indicator) return indicator;
+    indicator = document.createElement("div");
+    indicator.id = "ptrIndicator";
+    indicator.className = "ptr-indicator";
+    indicator.innerHTML = `<span class="ptr-icon">↓</span><span class="ptr-label">Pull to refresh</span>`;
+    document.body.appendChild(indicator);
+    return indicator;
+  }
+
+  function updateIndicator(progress) {
+    const el = ensureIndicator();
+    const translateY = Math.min(progress * pullThreshold, pullThreshold);
+    el.style.transform = `translateX(-50%) translateY(${translateY - 60}px)`;
+    el.style.opacity = Math.min(progress * 1.5, 1);
+    const icon = el.querySelector(".ptr-icon");
+    const label = el.querySelector(".ptr-label");
+    if (progress >= 1) {
+      icon.style.transform = "rotate(180deg)";
+      label.textContent = "Release to refresh";
+      el.classList.add("ptr-ready");
+    } else {
+      icon.style.transform = `rotate(${progress * 180}deg)`;
+      label.textContent = "Pull to refresh";
+      el.classList.remove("ptr-ready");
+    }
+  }
+
+  function hideIndicator() {
+    if (!indicator) return;
+    indicator.style.transform = "translateX(-50%) translateY(-100px)";
+    indicator.style.opacity = "0";
+    indicator.classList.remove("ptr-ready", "ptr-loading");
+  }
+
+  function showLoading() {
+    const el = ensureIndicator();
+    el.classList.add("ptr-loading");
+    el.querySelector(".ptr-icon").textContent = "↻";
+    el.querySelector(".ptr-label").textContent = "Refreshing…";
+  }
+
+  document.addEventListener("touchstart", (e) => {
+    if (isRefreshing) return;
+    // Only trigger when at top of scroll
+    if (window.scrollY > 0 || document.documentElement.scrollTop > 0) return;
+    // Skip if inside a modal (modal has its own scroll)
+    if (e.target.closest(".modal-overlay:not(.hidden)")) return;
+    // Skip if inside a scanner video element
+    if (e.target.closest(".bulk-scan-viewfinder")) return;
+    pullStartY = e.touches[0].clientY;
+    isPulling = true;
+  }, { passive: true });
+
+  document.addEventListener("touchmove", (e) => {
+    if (!isPulling || isRefreshing) return;
+    pullCurrentY = e.touches[0].clientY;
+    const delta = pullCurrentY - pullStartY;
+    if (delta > 0 && window.scrollY === 0) {
+      updateIndicator(delta / pullThreshold);
+    } else if (delta < -10) {
+      // User started scrolling up — cancel
+      isPulling = false;
+      hideIndicator();
+    }
+  }, { passive: true });
+
+  document.addEventListener("touchend", async () => {
+    if (!isPulling || isRefreshing) return;
+    const delta = pullCurrentY - pullStartY;
+    if (delta >= pullThreshold) {
+      isRefreshing = true;
+      showLoading();
+      try {
+        await refreshAllData();
+        render();
+        try { navigator.vibrate && navigator.vibrate(40); } catch {}
+        showToast("✓ Refreshed");
+      } catch (err) {
+        showToast("Refresh failed", true);
+      }
+      isRefreshing = false;
+    }
+    hideIndicator();
+    isPulling = false;
+  });
+}
+
 async function initApp() {
   if (!isSupabaseConfigured()) {
     renderConfigMissing();
     return;
   }
+  // Wire up hardware back button / browser back
+  window.addEventListener("popstate", handlePopState);
+  // Initial history state
+  try {
+    history.replaceState({ view: view || "login" }, "", "#" + encodeURIComponent(view || "login"));
+  } catch (e) {}
+  // Set up pull-to-refresh
+  setupPullToRefresh();
   try {
     initDb();
     render();
@@ -9792,8 +10105,6 @@ async function initApp() {
 }
 
 initApp();
-
-
 
 
 
