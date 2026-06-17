@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.4.0";
+const APP_VERSION = "3.4.2";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -52,6 +52,11 @@ function validateLogin(username, password) {
 
 let currentUser = null;
 let view = "login";
+let notifications = []; // {id, title, body, type, timestamp, read, link}
+let notifPanelOpen = false;
+let appLoadedAt = Date.now(); // baseline for filtering "new" events
+let knownInstallIds = new Set(); // tracks what we've already seen
+let knownRepairIds = new Set();
 let searchQuery = "";
 let pendingFilter = "all";
 let showCompleted = false;
@@ -606,7 +611,7 @@ async function completeTask(recordId, taskId) {
     const schemaIssue = /tasks|secondary_sim|column|schema cache|could not find/i.test(raw);
     showToast(
       schemaIssue
-        ? "Save failed: run pending-actions-migration.sql in Supabase SQL Editor first (the 'tasks' column is missing)."
+        ? "Save failed: database setup incomplete — contact admin (the 'tasks' column is missing)."
         : raw || "Failed to update task.",
       true
     );
@@ -671,7 +676,7 @@ async function completeUpdateSimPrimary(record, task) {
     render();
     const msg = err.message || "";
     if (err.code === SIMS_TABLE_MISSING || /sims/i.test(msg)) {
-      showToast("Run sims-table-migration.sql in Supabase first.", true);
+      showToast("Database setup incomplete — contact admin.", true);
     } else {
       showToast(msg || "Failed to save primary.", true);
     }
@@ -914,7 +919,7 @@ async function setTaskRemark(recordId, taskId, remarkText) {
     const schemaIssue = /tasks|column|schema cache|could not find/i.test(raw);
     showToast(
       schemaIssue
-        ? "Save failed: run pending-actions-migration.sql in Supabase SQL Editor first."
+        ? "Save failed: database setup incomplete — contact admin."
         : raw || "Failed to save remark.",
       true
     );
@@ -970,7 +975,7 @@ function withTimeout(promise, ms, label) {
       () =>
         reject(
           new Error(
-            `${label} timed out after ${Math.round(ms / 1000)}s — Supabase may be paused or unreachable.`
+            `${label} timed out after ${Math.round(ms / 1000)}s — Server may be unreachable.`
           )
         ),
       ms
@@ -1080,6 +1085,10 @@ async function refreshAllData() {
       userPermissions = { ...DEFAULT_PERMISSIONS };
     }
     lastSyncedAt = new Date();
+    // After data refresh, detect any new installs/repairs and notify
+    if (currentUser) {
+      detectNewActivityAndNotify();
+    }
   } finally {
     isLoadingData = false;
     updateLiveBadge();
@@ -2196,6 +2205,7 @@ function renderHeader(title, subtitle) {
                   if (currentUser === "abhinav") return "📦 Abhinav";
                   return `👤 ${escapeHtml(currentUser || "User")}`;
                 })()}</span>
+                ${renderNotifBell()}
                 <button type="button" class="btn btn-outline btn-sm" id="logoutBtn">Logout</button>
               </div>`
             : ""
@@ -2210,8 +2220,8 @@ function renderConfigMissing() {
     ${renderHeader("GPS Maintenance Tracker", "Setup required")}
     <main class="main centered">
       <section class="card login-card">
-        <h2>Supabase not configured</h2>
-        <p class="login-desc">Copy <code>config_example.js</code> to <code>config.js</code>, add your Supabase URL and anon key, then include it in <code>index.html</code>.</p>
+        <h2>Setup required</h2>
+        <p class="login-desc">Server configuration is missing. Please contact the administrator.</p>
       </section>
     </main>
   `;
@@ -2231,6 +2241,7 @@ function renderLoading(message = "Loading data...") {
 
 function bindLogout() {
   document.getElementById("logoutBtn")?.addEventListener("click", logout);
+  bindNotifBell();
 }
 
 function renderLogin() {
@@ -2270,13 +2281,13 @@ function renderLogin() {
 
     currentUser = username; // Store actual username not role (so multiple users with same role still differ)
     view = landingPageFor(username);
-    renderLoading("Loading data from Supabase...");
+    renderLoading("Loading data...");
     try {
       await refreshAllData();
       startRealtime();
       render();
     } catch (err) {
-      console.error("Supabase load failed:", err);
+      console.error("Data load failed:", err);
       renderConnectionError(err.message || "Failed to load data.");
     }
   });
@@ -2284,17 +2295,12 @@ function renderLogin() {
 
 function renderConnectionError(message) {
   app.innerHTML = `
-    ${renderHeader("Connection error", "Could not reach Supabase")}
+    ${renderHeader("Connection error", "Could not reach server")}
     <main class="main centered">
       <section class="card login-card">
         <h2>⚠️ Could not load data</h2>
         <p class="login-desc"><strong>${escapeHtml(message)}</strong></p>
-        <p class="login-desc">Most common cause: the Supabase project is paused (free tier auto-pauses after a week of inactivity).</p>
-        <ol class="setup-steps">
-          <li>Open <a href="https://supabase.com/dashboard/project/jzclmcjurfehpfybxryh" target="_blank" rel="noopener">your Supabase dashboard</a></li>
-          <li>If you see a "Restore project" or "Project paused" banner, click <strong>Restore</strong></li>
-          <li>Wait 1–2 minutes for it to wake up, then retry</li>
-        </ol>
+        <p class="login-desc">Please check your internet connection and try again. If the issue persists, contact the administrator.</p>
         <div class="form-actions" style="margin-top: 1.25rem;">
           <button type="button" class="btn btn-primary" id="retryConnect">↻ Retry connection</button>
           <button type="button" class="btn btn-secondary" id="backToLogin">Back to login</button>
@@ -2310,7 +2316,7 @@ function renderConnectionError(message) {
       render();
     } catch (err) {
       console.error("Retry failed:", err);
-      renderConnectionError(err.message || "Still cannot reach Supabase.");
+      renderConnectionError(err.message || "Still cannot reach server.");
     }
   });
   document.getElementById("backToLogin")?.addEventListener("click", () => {
@@ -2625,7 +2631,7 @@ function renderAkashHome() {
   document.getElementById("fabInstall")?.addEventListener("click", () => setView("install"));
   document.getElementById("fabRepair")?.addEventListener("click", () => setView("repair"));
   document.getElementById("refreshMine")?.addEventListener("click", async () => {
-    renderLoading("Refreshing data from Supabase...");
+    renderLoading("Refreshing data...");
     await refreshAllData();
     setView("akash-home");
   });
@@ -5295,7 +5301,7 @@ function renderInstallationsPage() {
       confirmLabel: "Upload",
     });
     if (!ok) return;
-    renderLoading("Uploading data to Supabase...");
+    renderLoading("Uploading data...");
     try {
       await importInstallations(file);
     } catch (err) {
@@ -5466,7 +5472,7 @@ function renderRepairsPage() {
       confirmLabel: "Upload",
     });
     if (!ok) return;
-    renderLoading("Uploading data to Supabase...");
+    renderLoading("Uploading data...");
     try {
       await importRepairs(file);
     } catch (err) {
@@ -5710,7 +5716,7 @@ function renderSimUpload() {
           saved += 1;
         } catch (err) {
           if (err.code === SIMS_TABLE_MISSING) {
-            errors.push(`Row ${rowNo}: sims table missing — run sims-table-migration.sql in Supabase first`);
+            errors.push(`Row ${rowNo}: sims table missing — database setup incomplete — contact admin`);
           } else {
             errors.push(`Row ${rowNo}: ${err.message}`);
           }
@@ -5765,7 +5771,7 @@ function renderSimUpload() {
       await refreshAllData();
       render();
       const msg = err.message || "Upload failed.";
-      showToast(err.code === SIMS_TABLE_MISSING ? "Run sims-table-migration.sql in Supabase first." : msg, true);
+      showToast(err.code === SIMS_TABLE_MISSING ? "Database setup incomplete — contact admin." : msg, true);
     }
   });
 
@@ -5906,9 +5912,9 @@ function renderSimDb() {
         ${renderAdminNav("sim-db")}
         <section class="card">
           <h2>⚙️ Migration needed</h2>
-          <p>The new SIM database needs a one-time setup. Open Supabase SQL Editor and run <code>sims-table-migration.sql</code>, then come back here.</p>
+          <p>The new SIM database needs a one-time setup. One-time setup needed — <code>sims-table-migration.sql</code>, then come back here.</p>
           <div class="form-actions" style="margin-top: 1rem;">
-            <a class="btn btn-primary" href="https://supabase.com/dashboard/project/jzclmcjurfehpfybxryh/sql/new" target="_blank" rel="noopener">Open SQL Editor →</a>
+            <span class="hint">Contact administrator to complete setup.</span>
             <button type="button" class="btn btn-secondary" id="retrySimDb">↻ Reload</button>
           </div>
         </section>
@@ -6591,9 +6597,9 @@ function _OLD_renderSimDb_v321() {
         ${renderAdminNav("sim-db")}
         <section class="card">
           <h2>⚙️ Migration needed</h2>
-          <p>The new SIM database needs a one-time setup. Open Supabase SQL Editor and run <code>sims-table-migration.sql</code>, then come back here.</p>
+          <p>The new SIM database needs a one-time setup. One-time setup needed — <code>sims-table-migration.sql</code>, then come back here.</p>
           <div class="form-actions" style="margin-top: 1rem;">
-            <a class="btn btn-primary" href="https://supabase.com/dashboard/project/jzclmcjurfehpfybxryh/sql/new" target="_blank" rel="noopener">Open SQL Editor →</a>
+            <span class="hint">Contact administrator to complete setup.</span>
             <button type="button" class="btn btn-secondary" id="retrySimDb">↻ Reload</button>
           </div>
         </section>
@@ -7286,9 +7292,9 @@ function renderStockPage() {
         ${renderAdminNav("stock")}
         <section class="card">
           <h2>⚙️ Migration needed</h2>
-          <p>The Stock page needs a one-time setup. Open Supabase SQL Editor and run <code>stock-items-migration.sql</code>, then come back here.</p>
+          <p>The Stock page needs a one-time setup. One-time setup needed — <code>stock-items-migration.sql</code>, then come back here.</p>
           <div class="form-actions" style="margin-top: 1rem;">
-            <a class="btn btn-primary" href="https://supabase.com/dashboard/project/jzclmcjurfehpfybxryh/sql/new" target="_blank" rel="noopener">Open SQL Editor →</a>
+            <span class="hint">Contact administrator to complete setup.</span>
             <button type="button" class="btn btn-secondary" id="retryStock">↻ Reload</button>
           </div>
         </section>
@@ -9166,7 +9172,7 @@ function openAccountsTxModal(type) {
       render();
     } catch (err) {
       console.error("Save transaction failed", err);
-      showToast(err.message || "Failed to save. Run accounts-migration.sql in Supabase first.", true);
+      showToast(err.message || "Failed to save. Database setup incomplete — contact admin.", true);
     }
   };
 }
@@ -9966,8 +9972,262 @@ async function saveBulkStockItems() {
 
 
 /* ============================================================
-   Pull-to-refresh — native gesture support
+   Notifications — in-app bell + browser OS notifications
    ============================================================ */
+
+const NOTIF_SOUND_DATA_URI = ""; // (optional — could embed beep data URI)
+const NOTIF_LIMIT = 50;
+
+/** Adds a notification to the in-app list + plays sound + shows OS notification */
+function addNotification({ title, body, type = "info", link = null, vehicleNo = null }) {
+  const notif = {
+    id: "n-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8),
+    title,
+    body,
+    type,
+    timestamp: Date.now(),
+    read: false,
+    link,
+    vehicleNo,
+  };
+  notifications.unshift(notif);
+  // Cap list size
+  if (notifications.length > NOTIF_LIMIT) {
+    notifications = notifications.slice(0, NOTIF_LIMIT);
+  }
+  // Play in-app sound
+  try { playBeep(700, 0.1); setTimeout(() => playBeep(900, 0.1), 110); } catch {}
+  // Vibrate (mobile)
+  try { navigator.vibrate && navigator.vibrate([60, 40, 60]); } catch {}
+  // OS-level notification if permission granted + page not focused
+  showBrowserNotification(notif);
+  // Re-render to update bell badge
+  if (typeof updateNotifBadge === "function") updateNotifBadge();
+}
+
+function showBrowserNotification(notif) {
+  // Skip if user has tab focused and page is visible (in-app is enough)
+  if (document.visibilityState === "visible" && document.hasFocus()) return;
+  if (!("Notification" in window)) return;
+  if (Notification.permission !== "granted") return;
+  try {
+    const n = new Notification(notif.title, {
+      body: notif.body,
+      icon: "/icon-192.png",
+      badge: "/icon-96.png",
+      tag: notif.type, // group similar notifications
+      timestamp: notif.timestamp,
+      vibrate: [60, 40, 60],
+      requireInteraction: false,
+    });
+    n.onclick = () => {
+      window.focus();
+      n.close();
+      // Mark as read + maybe navigate
+      const target = notifications.find((x) => x.id === notif.id);
+      if (target) target.read = true;
+      if (notif.vehicleNo) {
+        searchQuery = notif.vehicleNo;
+        setView("installations");
+      }
+    };
+    // Auto-close after 8s
+    setTimeout(() => { try { n.close(); } catch {} }, 8000);
+  } catch (e) {
+    console.warn("Browser notification failed:", e);
+  }
+}
+
+async function requestNotificationPermission() {
+  if (!("Notification" in window)) {
+    showToast("Browser doesn't support notifications.", true);
+    return false;
+  }
+  if (Notification.permission === "granted") return true;
+  if (Notification.permission === "denied") {
+    showToast("Notifications blocked. Enable in browser settings.", true);
+    return false;
+  }
+  try {
+    const result = await Notification.requestPermission();
+    if (result === "granted") {
+      showToast("✓ Notifications enabled");
+      // Welcome notification
+      try {
+        new Notification("GPS Tracker", {
+          body: "You'll now get notified about new installations.",
+          icon: "/icon-192.png",
+        });
+      } catch {}
+      return true;
+    }
+    showToast("Notifications denied.", true);
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Checks for new installs/repairs in current data vs known set + creates notifications */
+function detectNewActivityAndNotify() {
+  // First-time setup — populate known sets without notifying
+  if (knownInstallIds.size === 0 && knownRepairIds.size === 0) {
+    installations.forEach((i) => knownInstallIds.add(i.id));
+    maintenanceRecords.forEach((m) => knownRepairIds.add(m.id));
+    return;
+  }
+  // Detect new installations
+  for (const inst of installations) {
+    if (knownInstallIds.has(inst.id)) continue;
+    knownInstallIds.add(inst.id);
+    // Skip if created by current user (you don't notify yourself)
+    if (inst.createdBy === currentUser) continue;
+    // Skip if older than app load (was already there)
+    if (new Date(inst.createdAt).getTime() < appLoadedAt - 60000) continue;
+    addNotification({
+      title: `🆕 New Installation: ${inst.vehicleNo}`,
+      body: `${inst.createdBy || "Someone"} created an installation. IMEI: …${(getCurrentImei(inst) || "").slice(-6)}`,
+      type: "install",
+      vehicleNo: inst.vehicleNo,
+    });
+  }
+  // Detect new repairs
+  for (const m of maintenanceRecords) {
+    if (knownRepairIds.has(m.id)) continue;
+    knownRepairIds.add(m.id);
+    if (m.createdBy === currentUser) continue;
+    if (new Date(m.createdAt).getTime() < appLoadedAt - 60000) continue;
+    addNotification({
+      title: `🛠 Repair logged: ${m.vehicleNo}`,
+      body: `${m.createdBy || "Someone"} logged repair work.`,
+      type: "repair",
+      vehicleNo: m.vehicleNo,
+    });
+  }
+}
+
+/** Bell + dropdown rendering */
+function renderNotifBell() {
+  const unreadCount = notifications.filter((n) => !n.read).length;
+  return `
+    <div class="notif-wrap">
+      <button type="button" class="notif-bell" id="notifBellBtn" aria-label="Notifications">
+        🔔
+        ${unreadCount > 0 ? `<span class="notif-badge">${unreadCount > 99 ? "99+" : unreadCount}</span>` : ""}
+      </button>
+      ${notifPanelOpen ? renderNotifPanel() : ""}
+    </div>
+  `;
+}
+
+function renderNotifPanel() {
+  const perm = ("Notification" in window) ? Notification.permission : "unsupported";
+  return `
+    <div class="notif-panel" id="notifPanel">
+      <div class="notif-panel-header">
+        <h3>Notifications</h3>
+        <div class="notif-panel-actions">
+          ${notifications.length > 0 ? `<button type="button" class="notif-clear-all" id="notifClearAll">Clear all</button>` : ""}
+          <button type="button" class="notif-close" id="notifCloseBtn">✕</button>
+        </div>
+      </div>
+      ${perm === "default" ? `
+        <div class="notif-permission-prompt">
+          <p>🔕 OS-level notifications not enabled. Enable to get notified when app is in background.</p>
+          <button type="button" class="btn btn-primary btn-sm" id="notifEnableBtn">Enable Notifications</button>
+        </div>
+      ` : perm === "denied" ? `
+        <div class="notif-permission-prompt notif-perm-denied">
+          <p>🚫 Notifications blocked. Enable in browser settings to get OS-level alerts.</p>
+        </div>
+      ` : ""}
+      <div class="notif-list">
+        ${notifications.length === 0
+          ? `<div class="notif-empty">
+              <div class="notif-empty-icon">🔔</div>
+              <p>No notifications yet</p>
+              <p class="notif-empty-sub">You'll see new installs and repairs here.</p>
+            </div>`
+          : notifications.map((n) => `
+              <div class="notif-item ${n.read ? "notif-read" : ""}" data-notif-id="${escapeHtml(n.id)}" ${n.vehicleNo ? `data-vehicle="${escapeHtml(n.vehicleNo)}"` : ""}>
+                <div class="notif-item-icon">${n.type === "install" ? "🆕" : n.type === "repair" ? "🛠" : n.type === "stock" ? "📦" : "ℹ️"}</div>
+                <div class="notif-item-content">
+                  <div class="notif-item-title">${escapeHtml(n.title)}</div>
+                  <div class="notif-item-body">${escapeHtml(n.body)}</div>
+                  <div class="notif-item-time">${timeAgoShort(n.timestamp)}</div>
+                </div>
+                ${!n.read ? `<span class="notif-item-dot"></span>` : ""}
+              </div>
+            `).join("")
+        }
+      </div>
+    </div>
+  `;
+}
+
+function timeAgoShort(ts) {
+  const diff = Date.now() - ts;
+  if (diff < 60000) return "just now";
+  if (diff < 3600000) return Math.floor(diff / 60000) + "m ago";
+  if (diff < 86400000) return Math.floor(diff / 3600000) + "h ago";
+  return Math.floor(diff / 86400000) + "d ago";
+}
+
+function updateNotifBadge() {
+  const wrap = document.querySelector(".notif-wrap");
+  if (!wrap) return;
+  wrap.outerHTML = renderNotifBell();
+  bindNotifBell();
+}
+
+function bindNotifBell() {
+  document.getElementById("notifBellBtn")?.addEventListener("click", () => {
+    notifPanelOpen = !notifPanelOpen;
+    // Mark all as read when opening
+    if (notifPanelOpen) {
+      notifications.forEach((n) => { n.read = true; });
+    }
+    updateNotifBadge();
+  });
+  document.getElementById("notifCloseBtn")?.addEventListener("click", () => {
+    notifPanelOpen = false;
+    updateNotifBadge();
+  });
+  document.getElementById("notifClearAll")?.addEventListener("click", () => {
+    notifications = [];
+    notifPanelOpen = false;
+    updateNotifBadge();
+  });
+  document.getElementById("notifEnableBtn")?.addEventListener("click", async () => {
+    await requestNotificationPermission();
+    updateNotifBadge();
+  });
+  // Click on individual notification → navigate to vehicle
+  document.querySelectorAll(".notif-item").forEach((el) => {
+    el.addEventListener("click", () => {
+      const vehicleNo = el.dataset.vehicle;
+      if (vehicleNo) {
+        searchQuery = vehicleNo;
+        setView("installations");
+        notifPanelOpen = false;
+      }
+    });
+  });
+  // Click outside closes panel
+  if (notifPanelOpen) {
+    setTimeout(() => {
+      const closer = (e) => {
+        if (!e.target.closest(".notif-wrap")) {
+          notifPanelOpen = false;
+          updateNotifBadge();
+          document.removeEventListener("click", closer);
+        }
+      };
+      document.addEventListener("click", closer);
+    }, 50);
+  }
+}
+
 function setupPullToRefresh() {
   let pullStartY = 0;
   let pullCurrentY = 0;
@@ -10065,7 +10325,7 @@ function setupPullToRefresh() {
 }
 
 async function initApp() {
-  if (!isSupabaseConfigured()) {
+  if (!isApiConfigured()) {
     renderConfigMissing();
     return;
   }
@@ -10105,6 +10365,4 @@ async function initApp() {
 }
 
 initApp();
-
-
 
