@@ -1,9 +1,9 @@
 // Service worker — app shell caching with network-first for HTML so updates
 // arrive quickly, and stale-while-revalidate for JS/CSS so the app loads
-// fast offline. Supabase API calls are never cached (always live).
-const VERSION = "v2.9.0";
+// fast offline. Backend API calls are never cached (always live).
+const VERSION = "v3.4.2";
 const SHELL = `gps-tracker-shell-${VERSION}`;
-
+ 
 const SHELL_FILES = [
   "./",
   "./index.html",
@@ -21,14 +21,14 @@ const SHELL_FILES = [
   "./icon-maskable-192.png",
   "./icon-maskable-512.png",
 ];
-
+ 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(SHELL).then((cache) => cache.addAll(SHELL_FILES).catch(() => {}))
   );
   self.skipWaiting();
 });
-
+ 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
@@ -37,7 +37,7 @@ self.addEventListener("activate", (event) => {
       .then(() => self.clients.claim())
   );
 });
-
+ 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   // Skip non-GET and cross-origin API calls.
@@ -49,7 +49,7 @@ self.addEventListener("fetch", (event) => {
   ) {
     return; // Let the network handle it directly.
   }
-
+ 
   // HTML: network-first, fallback to cache.
   if (event.request.mode === "navigate" || event.request.destination === "document") {
     event.respondWith(
@@ -63,7 +63,7 @@ self.addEventListener("fetch", (event) => {
     );
     return;
   }
-
+ 
   // Static assets: stale-while-revalidate.
   event.respondWith(
     caches.match(event.request).then((cached) => {
@@ -78,3 +78,15 @@ self.addEventListener("fetch", (event) => {
     })
   );
 });
+ 
+
+
+
+
+
+
+
+
+
+
+
