@@ -1,18 +1,21 @@
-let supabaseClient = null;
-
-const BUILT_IN_SUPABASE_URL = "https://jzclmcjurfehpfybxryh.supabase.co";
-const BUILT_IN_SUPABASE_ANON_KEY =
+let dbClient = null;
+// Cache reference to the backend SDK lazily — the SDK is loaded via a script
+// tag, but module evaluation order can vary. Read it at init() time.
+let _backendSDK = null;
+ 
+const BUILT_IN_API_URL = "https://jzclmcjurfehpfybxryh.supabase.co";
+const BUILT_IN_API_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp6Y2xtY2p1cmZlaHBmeWJ4cnloIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk2NDI2NDcsImV4cCI6MjA5NTIxODY0N30.pdB45v7uBRzsh6M_Vrb43-SV_kLMwjGHpi9-uBuqHmw";
-
-function getSupabaseSettings() {
+ 
+function getApiSettings() {
   return {
-    url: window.SUPABASE_URL || BUILT_IN_SUPABASE_URL,
-    anonKey: window.SUPABASE_ANON_KEY || BUILT_IN_SUPABASE_ANON_KEY,
+    url: window.API_URL || BUILT_IN_API_URL,
+    anonKey: window.API_KEY || BUILT_IN_API_KEY,
   };
 }
-
-function isSupabaseConfigured() {
-  const { url, anonKey } = getSupabaseSettings();
+ 
+function isApiConfigured() {
+  const { url, anonKey } = getApiSettings();
   return Boolean(
     url &&
       anonKey &&
@@ -20,23 +23,30 @@ function isSupabaseConfigured() {
       !anonKey.includes("YOUR_ANON")
   );
 }
-
+ 
 function initDb() {
-  if (!isSupabaseConfigured()) {
-    throw new Error("Supabase is not configured.");
+  if (!isApiConfigured()) {
+    throw new Error("Server is not configured. Please contact administrator.");
   }
-  const { url, anonKey } = getSupabaseSettings();
-  supabaseClient = window.supabase.createClient(url, anonKey, {
+  // Lazily capture backend SDK (loaded via global script tag).
+  if (!_backendSDK) {
+    _backendSDK = (typeof window !== "undefined" && window.supabase) ? window.supabase : null;
+  }
+  if (!_backendSDK || !_backendSDK.createClient) {
+    throw new Error("Backend SDK failed to load. Please refresh the page.");
+  }
+  const { url, anonKey } = getApiSettings();
+  dbClient = _backendSDK.createClient(url, anonKey, {
     realtime: { params: { eventsPerSecond: 10 } },
   });
-  return supabaseClient;
+  return dbClient;
 }
-
+ 
 function getDb() {
-  if (!supabaseClient) initDb();
-  return supabaseClient;
+  if (!dbClient) initDb();
+  return dbClient;
 }
-
+ 
 function rowToInstallation(row) {
   return {
     id: row.id,
@@ -52,7 +62,7 @@ function rowToInstallation(row) {
     createdBy: row.created_by,
   };
 }
-
+ 
 function installationToRow(inst) {
   return {
     id: inst.id,
@@ -68,7 +78,7 @@ function installationToRow(inst) {
     created_by: inst.createdBy,
   };
 }
-
+ 
 function rowToMaintenance(row) {
   return {
     id: row.id,
@@ -94,7 +104,7 @@ function rowToMaintenance(row) {
     createdBy: row.created_by,
   };
 }
-
+ 
 function maintenanceToRow(record) {
   return {
     id: record.id,
@@ -120,38 +130,38 @@ function maintenanceToRow(record) {
     created_by: record.createdBy,
   };
 }
-
+ 
 async function fetchInstallations() {
   const { data, error } = await getDb()
     .from("installations")
     .select("*")
     .order("created_at", { ascending: false });
-
+ 
   if (error) throw new Error(error.message);
   return (data || []).map(rowToInstallation);
 }
-
+ 
 async function fetchMaintenanceRecords() {
   const { data, error } = await getDb()
     .from("maintenance_records")
     .select("*")
     .order("created_at", { ascending: false });
-
+ 
   if (error) throw new Error(error.message);
   return (data || []).map(rowToMaintenance);
 }
-
+ 
 async function insertInstallation(inst) {
   const { data, error } = await getDb()
     .from("installations")
     .insert(installationToRow(inst))
     .select()
     .single();
-
+ 
   if (error) throw new Error(error.message);
   return rowToInstallation(data);
 }
-
+ 
 // Updates all editable fields including the admin-managed secondary SIM.
 async function updateInstallation(inst) {
   const { data, error } = await getDb()
@@ -169,22 +179,22 @@ async function updateInstallation(inst) {
     .eq("id", inst.id)
     .select()
     .single();
-
+ 
   if (error) throw new Error(error.message);
   return rowToInstallation(data);
 }
-
+ 
 async function insertMaintenanceRecord(record) {
   const { data, error } = await getDb()
     .from("maintenance_records")
     .insert(maintenanceToRow(record))
     .select()
     .single();
-
+ 
   if (error) throw new Error(error.message);
   return rowToMaintenance(data);
 }
-
+ 
 async function updateMaintenanceRecord(record) {
   const { data, error } = await getDb()
     .from("maintenance_records")
@@ -197,11 +207,11 @@ async function updateMaintenanceRecord(record) {
     .eq("id", record.id)
     .select()
     .single();
-
+ 
   if (error) throw new Error(error.message);
   return rowToMaintenance(data);
 }
-
+ 
 /* ============================================================
    SIMS TABLE
    A SIM is one physical card with two numbers:
@@ -209,7 +219,7 @@ async function updateMaintenanceRecord(record) {
      secondaryNumber - typically 19-20 digit ICCID printed on the card
    The secondary is the unique permanent identifier of the card.
    ============================================================ */
-
+ 
 function rowToSim(row) {
   return {
     id: row.id,
@@ -220,7 +230,7 @@ function rowToSim(row) {
     updatedAt: row.updated_at,
   };
 }
-
+ 
 function simToRow(sim) {
   return {
     primary_number: sim.primaryNumber ? String(sim.primaryNumber).trim() || null : null,
@@ -228,10 +238,10 @@ function simToRow(sim) {
     notes: sim.notes || null,
   };
 }
-
+ 
 // Sentinel error so callers can detect "migration not yet run".
 const SIMS_TABLE_MISSING = "SIMS_TABLE_MISSING";
-
+ 
 function isMissingSimsTableError(err) {
   if (!err) return false;
   const msg = (err.message || "").toLowerCase();
@@ -248,16 +258,16 @@ function isMissingSimsTableError(err) {
     (msg.includes("schema cache") && msg.includes("sims"))
   );
 }
-
+ 
 async function fetchSims() {
   const { data, error } = await getDb()
     .from("sims")
     .select("*")
     .order("created_at", { ascending: false });
-
+ 
   if (error) {
     if (isMissingSimsTableError(error)) {
-      const e = new Error("sims table missing — please run sims-table-migration.sql in Supabase");
+      const e = new Error("sims table missing — database setup incomplete");
       e.code = SIMS_TABLE_MISSING;
       throw e;
     }
@@ -265,17 +275,17 @@ async function fetchSims() {
   }
   return (data || []).map(rowToSim);
 }
-
+ 
 async function insertSim(sim) {
   const { data, error } = await getDb()
     .from("sims")
     .insert(simToRow(sim))
     .select()
     .single();
-
+ 
   if (error) {
     if (isMissingSimsTableError(error)) {
-      const e = new Error("sims table missing — please run sims-table-migration.sql in Supabase");
+      const e = new Error("sims table missing — database setup incomplete");
       e.code = SIMS_TABLE_MISSING;
       throw e;
     }
@@ -283,7 +293,7 @@ async function insertSim(sim) {
   }
   return rowToSim(data);
 }
-
+ 
 async function updateSim(sim) {
   const { data, error } = await getDb()
     .from("sims")
@@ -296,17 +306,17 @@ async function updateSim(sim) {
     .eq("id", sim.id)
     .select()
     .single();
-
+ 
   if (error) throw new Error(error.message);
   return rowToSim(data);
 }
-
+ 
 async function deleteSim(simId) {
   const { error } = await getDb().from("sims").delete().eq("id", simId);
   if (error) throw new Error(error.message);
   return true;
 }
-
+ 
 // Upsert a SIM by secondary_number (the unique permanent identifier).
 // If the SIM exists, primary_number is updated (and notes if provided).
 // If not, a new row is inserted.
@@ -317,16 +327,16 @@ async function upsertSim({ primaryNumber, secondaryNumber, notes }) {
   };
   if (notes !== undefined) payload.notes = notes || null;
   payload.updated_at = new Date().toISOString();
-
+ 
   const { data, error } = await getDb()
     .from("sims")
     .upsert(payload, { onConflict: "secondary_number" })
     .select()
     .single();
-
+ 
   if (error) {
     if (isMissingSimsTableError(error)) {
-      const e = new Error("sims table missing — please run sims-table-migration.sql in Supabase");
+      const e = new Error("sims table missing — database setup incomplete");
       e.code = SIMS_TABLE_MISSING;
       throw e;
     }
@@ -334,14 +344,14 @@ async function upsertSim({ primaryNumber, secondaryNumber, notes }) {
   }
   return rowToSim(data);
 }
-
+ 
 /* ============================================================
    STOCK ITEMS TABLE
    Inventory: GPS devices, brackets, cables, sensors, antennas,
    batteries, tools, etc. Each item has quantity, unit, optional
    cost-per-unit, and optional low-stock threshold.
    ============================================================ */
-
+ 
 function rowToStockItem(row) {
   return {
     id: row.id,
@@ -358,7 +368,7 @@ function rowToStockItem(row) {
     updatedAt: row.updated_at,
   };
 }
-
+ 
 function stockItemToRow(item) {
   const num = (v) => (v === "" || v == null ? null : Number(v));
   return {
@@ -373,9 +383,9 @@ function stockItemToRow(item) {
     metadata: item.metadata && typeof item.metadata === "object" ? item.metadata : {},
   };
 }
-
+ 
 const STOCK_ITEMS_TABLE_MISSING = "STOCK_ITEMS_TABLE_MISSING";
-
+ 
 function isMissingStockItemsTableError(err) {
   if (!err) return false;
   const msg = (err.message || "").toLowerCase();
@@ -388,16 +398,16 @@ function isMissingStockItemsTableError(err) {
     (msg.includes("schema cache") && msg.includes("stock_items"))
   );
 }
-
+ 
 async function fetchStockItems() {
   const { data, error } = await getDb()
     .from("stock_items")
     .select("*")
     .order("name", { ascending: true });
-
+ 
   if (error) {
     if (isMissingStockItemsTableError(error)) {
-      const e = new Error("stock_items table missing — please run stock-items-migration.sql in Supabase");
+      const e = new Error("stock_items table missing — database setup incomplete");
       e.code = STOCK_ITEMS_TABLE_MISSING;
       throw e;
     }
@@ -405,17 +415,17 @@ async function fetchStockItems() {
   }
   return (data || []).map(rowToStockItem);
 }
-
+ 
 async function insertStockItem(item) {
   const { data, error } = await getDb()
     .from("stock_items")
     .insert(stockItemToRow(item))
     .select()
     .single();
-
+ 
   if (error) {
     if (isMissingStockItemsTableError(error)) {
-      const e = new Error("stock_items table missing — please run stock-items-migration.sql in Supabase");
+      const e = new Error("stock_items table missing — database setup incomplete");
       e.code = STOCK_ITEMS_TABLE_MISSING;
       throw e;
     }
@@ -423,7 +433,7 @@ async function insertStockItem(item) {
   }
   return rowToStockItem(data);
 }
-
+ 
 async function updateStockItem(item) {
   const payload = stockItemToRow(item);
   payload.updated_at = new Date().toISOString();
@@ -436,20 +446,20 @@ async function updateStockItem(item) {
   if (error) throw new Error(error.message);
   return rowToStockItem(data);
 }
-
+ 
 async function deleteStockItem(itemId) {
   const { error } = await getDb().from("stock_items").delete().eq("id", itemId);
   if (error) throw new Error(error.message);
   return true;
 }
-
+ 
 /* ============================================================
    STOCK TRANSACTIONS TABLE
    Each stock adjustment is recorded here, optionally linked to
    an installation/vehicle so the Stock page can show "Used in
    VEHICLE-X" and a full per-item history.
    ============================================================ */
-
+ 
 function rowToStockTx(row) {
   return {
     id: row.id,
@@ -465,9 +475,9 @@ function rowToStockTx(row) {
     createdAt: row.created_at,
   };
 }
-
+ 
 const STOCK_TX_TABLE_MISSING = "STOCK_TX_TABLE_MISSING";
-
+ 
 function isMissingStockTxTableError(err) {
   if (!err) return false;
   const msg = (err.message || "").toLowerCase();
@@ -480,17 +490,17 @@ function isMissingStockTxTableError(err) {
     (msg.includes("schema cache") && msg.includes("stock_transactions"))
   );
 }
-
+ 
 async function fetchStockTransactions() {
   const { data, error } = await getDb()
     .from("stock_transactions")
     .select("*")
     .order("created_at", { ascending: false })
     .limit(2000);
-
+ 
   if (error) {
     if (isMissingStockTxTableError(error)) {
-      const e = new Error("stock_transactions table missing — please run stock-transactions-migration.sql in Supabase");
+      const e = new Error("stock_transactions table missing — database setup incomplete");
       e.code = STOCK_TX_TABLE_MISSING;
       throw e;
     }
@@ -498,7 +508,7 @@ async function fetchStockTransactions() {
   }
   return (data || []).map(rowToStockTx);
 }
-
+ 
 async function insertStockTransaction(tx) {
   const { data, error } = await getDb()
     .from("stock_transactions")
@@ -515,10 +525,10 @@ async function insertStockTransaction(tx) {
     })
     .select()
     .single();
-
+ 
   if (error) {
     if (isMissingStockTxTableError(error)) {
-      const e = new Error("stock_transactions table missing — please run stock-transactions-migration.sql in Supabase");
+      const e = new Error("stock_transactions table missing — database setup incomplete");
       e.code = STOCK_TX_TABLE_MISSING;
       throw e;
     }
@@ -526,12 +536,12 @@ async function insertStockTransaction(tx) {
   }
   return rowToStockTx(data);
 }
-
+ 
 /* ============================================================
    DELETION AUDIT LOG
    Immutable record of every destructive action (with reason).
    ============================================================ */
-
+ 
 function rowToDeletionLog(row) {
   return {
     id: row.id,
@@ -544,9 +554,9 @@ function rowToDeletionLog(row) {
     deletedAt: row.deleted_at,
   };
 }
-
+ 
 const DELETION_LOG_TABLE_MISSING = "DELETION_LOG_TABLE_MISSING";
-
+ 
 function isMissingDeletionLogError(err) {
   if (!err) return false;
   const msg = (err.message || "").toLowerCase();
@@ -559,7 +569,7 @@ function isMissingDeletionLogError(err) {
     (msg.includes("schema cache") && msg.includes("deletion_log"))
   );
 }
-
+ 
 async function fetchDeletionLog(limit = 200) {
   const { data, error } = await getDb()
     .from("deletion_log")
@@ -568,7 +578,7 @@ async function fetchDeletionLog(limit = 200) {
     .limit(limit);
   if (error) {
     if (isMissingDeletionLogError(error)) {
-      const e = new Error("deletion_log table missing — please run deletion-log-migration.sql in Supabase");
+      const e = new Error("deletion_log table missing — database setup incomplete");
       e.code = DELETION_LOG_TABLE_MISSING;
       throw e;
     }
@@ -576,7 +586,7 @@ async function fetchDeletionLog(limit = 200) {
   }
   return (data || []).map(rowToDeletionLog);
 }
-
+ 
 async function insertDeletionLog(entry) {
   const { error } = await getDb()
     .from("deletion_log")
@@ -599,18 +609,18 @@ async function insertDeletionLog(entry) {
   }
   return true;
 }
-
+ 
 /* ============================================================
    SUPPLIERS TABLE
    Admin-managed list of suppliers used in the Stock page.
    ============================================================ */
-
+ 
 function rowToSupplier(row) {
   return { id: row.id, name: row.name, createdAt: row.created_at };
 }
-
+ 
 const SUPPLIERS_TABLE_MISSING = "SUPPLIERS_TABLE_MISSING";
-
+ 
 function isMissingSuppliersTableError(err) {
   if (!err) return false;
   const msg = (err.message || "").toLowerCase();
@@ -623,7 +633,7 @@ function isMissingSuppliersTableError(err) {
     (msg.includes("schema cache") && msg.includes("suppliers"))
   );
 }
-
+ 
 async function fetchSuppliers() {
   const { data, error } = await getDb()
     .from("suppliers")
@@ -631,7 +641,7 @@ async function fetchSuppliers() {
     .order("name", { ascending: true });
   if (error) {
     if (isMissingSuppliersTableError(error)) {
-      const e = new Error("suppliers table missing — please run suppliers-and-extras-migration.sql in Supabase");
+      const e = new Error("suppliers table missing — database setup incomplete");
       e.code = SUPPLIERS_TABLE_MISSING;
       throw e;
     }
@@ -639,7 +649,7 @@ async function fetchSuppliers() {
   }
   return (data || []).map(rowToSupplier);
 }
-
+ 
 async function insertSupplier(name) {
   const trimmed = String(name).trim();
   if (!trimmed) throw new Error("Supplier name cannot be empty.");
@@ -656,19 +666,19 @@ async function insertSupplier(name) {
   }
   return rowToSupplier(data);
 }
-
+ 
 async function deleteSupplier(id) {
   const { error } = await getDb().from("suppliers").delete().eq("id", id);
   if (error) throw new Error(error.message);
   return true;
 }
-
+ 
 /* ============================================================
    INSTALLATION & MAINTENANCE DELETE
    Hard-delete an installation or repair entry. Auto-consume
    reversal is handled in app.js (consumeStockReverse).
    ============================================================ */
-
+ 
 async function deleteInstallation(installationId) {
   const { error } = await getDb()
     .from("installations")
@@ -677,7 +687,7 @@ async function deleteInstallation(installationId) {
   if (error) throw new Error(error.message);
   return true;
 }
-
+ 
 async function deleteMaintenanceRecord(recordId) {
   const { error } = await getDb()
     .from("maintenance_records")
@@ -686,12 +696,12 @@ async function deleteMaintenanceRecord(recordId) {
   if (error) throw new Error(error.message);
   return true;
 }
-
+ 
 /* ============================================================
    STOCK CATEGORIES TABLE
    Admin-managed list of categories used in the Stock page.
    ============================================================ */
-
+ 
 function rowToCategory(row) {
   return {
     id: row.id,
@@ -699,9 +709,9 @@ function rowToCategory(row) {
     createdAt: row.created_at,
   };
 }
-
+ 
 const STOCK_CATEGORIES_TABLE_MISSING = "STOCK_CATEGORIES_TABLE_MISSING";
-
+ 
 function isMissingCategoriesTableError(err) {
   if (!err) return false;
   const msg = (err.message || "").toLowerCase();
@@ -714,7 +724,7 @@ function isMissingCategoriesTableError(err) {
     (msg.includes("schema cache") && msg.includes("stock_categories"))
   );
 }
-
+ 
 async function fetchStockCategories() {
   const { data, error } = await getDb()
     .from("stock_categories")
@@ -722,7 +732,7 @@ async function fetchStockCategories() {
     .order("name", { ascending: true });
   if (error) {
     if (isMissingCategoriesTableError(error)) {
-      const e = new Error("stock_categories table missing — please run stock-categories-migration.sql in Supabase");
+      const e = new Error("stock_categories table missing — database setup incomplete");
       e.code = STOCK_CATEGORIES_TABLE_MISSING;
       throw e;
     }
@@ -730,7 +740,7 @@ async function fetchStockCategories() {
   }
   return (data || []).map(rowToCategory);
 }
-
+ 
 async function insertStockCategory(name) {
   const trimmed = String(name).trim();
   if (!trimmed) throw new Error("Category name cannot be empty.");
@@ -748,13 +758,13 @@ async function insertStockCategory(name) {
   }
   return rowToCategory(data);
 }
-
+ 
 async function deleteStockCategory(id) {
   const { error } = await getDb().from("stock_categories").delete().eq("id", id);
   if (error) throw new Error(error.message);
   return true;
 }
-
+ 
 // Realtime subscription. onChange(eventType, payload):
 //   eventType = 'status' : connection status changes
 //   eventType = 'data'   : a row changed in any subscribed table
@@ -805,7 +815,7 @@ function subscribeRealtime(onChange) {
     .subscribe((status) => onChange("status", { status }));
   return channel;
 }
-
+ 
 async function unsubscribeRealtime(channel) {
   if (!channel) return;
   try {
@@ -814,11 +824,11 @@ async function unsubscribeRealtime(channel) {
     // ignore
   }
 }
-
+ 
 // ============================================================
 // ACCOUNTS MODULE (v3.0)
 // ============================================================
-
+ 
 // ----- Projects -----
 async function fetchAccountsProjects() {
   const { data, error } = await getDb()
@@ -833,7 +843,7 @@ async function fetchAccountsProjects() {
     createdBy: row.created_by,
   }));
 }
-
+ 
 async function insertAccountsProject(project) {
   const row = {
     id: project.id,
@@ -853,12 +863,12 @@ async function insertAccountsProject(project) {
     createdBy: data.created_by,
   };
 }
-
+ 
 async function deleteAccountsProject(id) {
   const { error } = await getDb().from("accounts_projects").delete().eq("id", id);
   if (error) throw error;
 }
-
+ 
 // ----- Transactions -----
 async function fetchAccountsTransactions() {
   const { data, error } = await getDb()
@@ -881,7 +891,7 @@ async function fetchAccountsTransactions() {
     createdBy: row.created_by,
   }));
 }
-
+ 
 async function insertAccountsTransaction(tx) {
   const row = {
     id: tx.id,
@@ -913,7 +923,7 @@ async function insertAccountsTransaction(tx) {
     createdBy: data.created_by,
   };
 }
-
+ 
 async function updateAccountsTransaction(id, patch) {
   const row = {};
   if ("type" in patch) row.type = patch.type;
@@ -932,16 +942,16 @@ async function updateAccountsTransaction(id, patch) {
   if (error) throw error;
   return data;
 }
-
+ 
 async function deleteAccountsTransaction(id) {
   const { error } = await getDb().from("accounts_transactions").delete().eq("id", id);
   if (error) throw error;
 }
-
+ 
 // ============================================================
 // USER PERMISSIONS (v3.1)
 // ============================================================
-
+ 
 async function fetchUserPermissions() {
   const { data, error } = await getDb()
     .from("user_permissions")
@@ -956,7 +966,7 @@ async function fetchUserPermissions() {
     updatedBy: row.updated_by,
   }));
 }
-
+ 
 async function upsertUserPermission(p) {
   const row = {
     username: p.username,
@@ -971,3 +981,15 @@ async function upsertUserPermission(p) {
     .upsert(row, { onConflict: "username" });
   if (error) throw error;
 }
+ 
+
+
+
+
+
+
+
+
+
+
+
