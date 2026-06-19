@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.5.5";
+const APP_VERSION = "3.5.6";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -1625,7 +1625,7 @@ function horizontalBarChart(items, opts = {}) {
 
 let _activeScanner = null;
 
-async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Point camera at the barcode or QR code.", onScan }) {
+async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Point camera at the barcode or QR code.", onScan, scanContext = "generic" }) {
   // Use the low-level Html5Qrcode API directly so we can force the BACK
   // camera (facingMode: "environment") instead of the front selfie cam.
   const HQR = window.Html5Qrcode;
@@ -1726,13 +1726,21 @@ async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Po
         HQRFormats.QR_CODE,
         HQRFormats.DATA_MATRIX,
         HQRFormats.PDF_417,
-      ]
+        HQRFormats.AZTEC,
+      ].filter(Boolean)
     : undefined;
 
   const config = {
-    fps: 15,                                // higher framerate for snappier detection
+    fps: scanContext === "sim" ? 10 : 15,   // SIM = lower fps for more careful detection
     qrbox: (vw, vh) => {
-      // For long Code 128 barcodes, we want a WIDE / SHORT scan box
+      // SIM barcodes are SHORTER than IMEI — narrower qrbox helps user
+      // align ONLY the barcode without including the adjacent QR code.
+      if (scanContext === "sim") {
+        const w = Math.min(vw * 0.78, 280);
+        const h = Math.min(vh * 0.32, 100);
+        return { width: Math.floor(w), height: Math.floor(h) };
+      }
+      // IMEI / generic: wide and short for long Code 128
       const w = Math.min(vw * 0.92, 360);
       const h = Math.min(vh * 0.45, 140);
       return { width: Math.floor(w), height: Math.floor(h) };
@@ -3163,8 +3171,9 @@ function renderInstallForm() {
   });
   document.getElementById("scanSim")?.addEventListener("click", () => {
     openBarcodeScannerModal({
-      title: "📷 Scan SIM ICCID",
-      hint: "SIM card pe printed long number ya barcode pe camera point karo.",
+      title: "📷 Scan SIM Barcode",
+      hint: "⚠️ Sirf BARCODE align karo (QR code nahi). Camera close mat lana — 10-15cm rakho.",
+      scanContext: "sim",
       onScan: (val) => {
         const cleaned = val.replace(/\D/g, "") || val.trim();
         const input = document.getElementById("instSim");
@@ -10885,5 +10894,4 @@ async function initApp() {
 }
 
 initApp();
-
 
