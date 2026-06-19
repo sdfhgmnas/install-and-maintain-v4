@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.5.4";
+const APP_VERSION = "3.5.5";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -1790,12 +1790,13 @@ async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Po
       if (facing === "environment") {
         try {
           const cams = await HQR.getCameras();
+          // STRICT: only pick a camera that explicitly identifies as back/rear.
+          // Never fall through to last camera (could be front-facing).
           const back = cams.find((c) => /back|rear|environment|world|wide(?!.*front)/i.test(c.label || ""));
-          const fallbackId = back?.id || cams[cams.length - 1]?.id;
-          if (fallbackId) {
+          if (back) {
             _activeScanner = new HQR("qrReader", { verbose: false, formatsToSupport: allFormats });
             await _activeScanner.start(
-              fallbackId,
+              back.id,
               config,
               async (decodedText) => {
                 await cleanup();
@@ -1806,6 +1807,9 @@ async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Po
             setStatus("📷 Hold steady, fill the bar in the frame");
             return;
           }
+          // No back camera at all → show error, don't fall back to front
+          setStatus("❌ Back camera not found. Use manual entry below.");
+          return;
         } catch (innerErr) {
           console.error("Camera enumeration fallback failed:", innerErr);
         }
@@ -3069,6 +3073,7 @@ function renderInstallForm() {
               <input type="text" id="instImei" required placeholder="e.g. 867530012345678" autocomplete="off" inputmode="numeric" />
               <button type="button" class="scan-btn" id="scanImei" aria-label="Scan IMEI barcode">📷</button>
             </div>
+            <p class="hint" id="instImeiHint"></p>
           </div>
           <div class="field">
             <label for="instVehicle">Vehicle No <span class="required">*</span></label>
@@ -3149,7 +3154,9 @@ function renderInstallForm() {
       hint: "GPS device pe printed barcode ya QR code pe camera point karo.",
       onScan: (val) => {
         const cleaned = val.replace(/\D/g, "") || val.trim();
-        document.getElementById("instImei").value = cleaned;
+        const imeiInput = document.getElementById("instImei");
+        imeiInput.value = cleaned;
+        imeiInput.dispatchEvent(new Event("input")); // trigger lookup
         showToast(`IMEI scanned: ${cleaned}`);
       },
     });
@@ -3168,6 +3175,39 @@ function renderInstallForm() {
     });
   });
 
+  // ===== Auto-detect IMEI from stock database =====
+  // When IMEI typed/scanned, check if found in stock + auto-select GPS Model.
+  document.getElementById("instImei")?.addEventListener("input", (e) => {
+    const v = e.target.value.trim();
+    const h = document.getElementById("instImeiHint");
+    if (!h) return;
+    if (!v || v.length < 8) {
+      h.textContent = "";
+      h.className = "hint";
+      return;
+    }
+    const matched = findStockByValue(v);
+    const gpsMatch = matched.find((it) => categoryKind(it.category) === "gps");
+    if (gpsMatch) {
+      // Detect model type from category/name
+      const nameUpper = (gpsMatch.name + " " + (gpsMatch.category || "")).toUpperCase();
+      let detectedType = "FMB";
+      if (nameUpper.includes("NORMAL")) detectedType = "Normal";
+      else if (nameUpper.includes("FMC")) detectedType = "FMC";
+      else if (nameUpper.includes("FMB")) detectedType = "FMB";
+      // Auto-select the segmented control
+      if (typeof applyGpsType === "function") applyGpsType(detectedType);
+      h.innerHTML = `<span class="hint-found">✓ Found in database — Auto-selected: <strong>${escapeHtml(detectedType)}</strong> (${escapeHtml(gpsMatch.name)})</span>`;
+      h.className = "hint hint-ok";
+    } else if (matched.length > 0) {
+      h.innerHTML = `<span class="hint-found">✓ Found in database — ${escapeHtml(matched[0].name)}</span>`;
+      h.className = "hint hint-ok";
+    } else {
+      h.textContent = "ℹ️ Not in stock database. Select GPS model above.";
+      h.className = "hint hint-info";
+    }
+  });
+
   // Live SIM lookup as Akash types the ICCID — shows whether the primary
   // is already known so he doesn't worry about the long number.
   document.getElementById("instSim")?.addEventListener("input", (e) => {
@@ -3180,12 +3220,23 @@ function renderInstallForm() {
       return;
     }
     const sim = findSimBySecondary(v);
+    // ALSO check stock database for this SIM
+    const stockMatched = findStockByValue(v);
+    const simStock = stockMatched.find((it) => categoryKind(it.category) === "sim");
+
     if (sim && sim.primaryNumber) {
-      h.textContent = `✓ SIM matched in database — ready to use.`;
+      let msg = `✓ SIM matched in database — Primary: <strong>${escapeHtml(sim.primaryNumber)}</strong>`;
+      if (simStock) msg += ` · Stock: ${escapeHtml(simStock.name)}`;
+      h.innerHTML = msg;
       h.className = "hint hint-ok";
     } else if (sim && !sim.primaryNumber) {
-      h.textContent = "⚠️ ICCID is in SIM database but primary not yet known — admin will fill it in Repair Progress.";
+      let msg = "⚠️ ICCID is in SIM database but primary not yet known — admin will fill it in Repair Progress.";
+      if (simStock) msg += ` · Found in Stock: ${escapeHtml(simStock.name)}`;
+      h.innerHTML = msg;
       h.className = "hint hint-warn";
+    } else if (simStock) {
+      h.innerHTML = `✓ Found in Stock database — <strong>${escapeHtml(simStock.name)}</strong>. Will auto-link on save.`;
+      h.className = "hint hint-ok";
     } else {
       h.textContent = "ℹ️ New ICCID — will be auto-added to SIM database. Admin can fill the primary number later.";
       h.className = "hint hint-info";
@@ -10208,8 +10259,8 @@ async function initNativeBulkScanner(addImei, setStatus, cleanup) {
 
     setStatus("Requesting camera permission…");
 
-    // SIMPLE constraints — just back camera, nothing fancy
-    // Complex constraints fail on many phones; we add advanced settings AFTER
+    // STRICT: enforce back camera. First try with `ideal`, then `exact`,
+    // then enumerate devices and explicitly pick a back-facing camera by label.
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -10217,19 +10268,47 @@ async function initNativeBulkScanner(addImei, setStatus, cleanup) {
         audio: false,
       });
     } catch (err) {
-      console.error("getUserMedia failed with environment:", err);
-      // Fallback: try with no facing constraint at all
+      console.error("getUserMedia ideal-environment failed:", err);
+      // Try exact
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
+          video: { facingMode: { exact: "environment" } },
           audio: false,
         });
       } catch (err2) {
-        console.error("getUserMedia failed completely:", err2);
-        setStatus("❌ Camera permission denied or unavailable");
-        return;
+        console.warn("getUserMedia exact-environment failed:", err2);
+        // Enumerate devices, find by label
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const cams = devices.filter((d) => d.kind === "videoinput");
+          const back = cams.find((c) => /back|rear|environment|world|wide(?!.*front)/i.test(c.label || ""));
+          if (back) {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: { deviceId: { exact: back.deviceId } },
+              audio: false,
+            });
+          } else {
+            console.error("No back-facing camera found");
+            setStatus("❌ Back camera not found. Use manual entry.");
+            return;
+          }
+        } catch (err3) {
+          console.error("Camera enumeration failed:", err3);
+          setStatus("❌ Camera permission denied or unavailable");
+          return;
+        }
       }
     }
+
+    // Verify what we actually got — if it's front, warn
+    try {
+      const track = stream.getVideoTracks()[0];
+      const settings = track.getSettings();
+      if (settings.facingMode === "user") {
+        console.warn("Got front camera despite requesting back");
+        setStatus("⚠️ Front camera active — barcode scan may not work well");
+      }
+    } catch {}
 
     video.srcObject = stream;
     video.muted = true;
@@ -10806,14 +10885,5 @@ async function initApp() {
 }
 
 initApp();
-
-
-
-
-
-
-
-
-
 
 
