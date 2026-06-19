@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.4.2";
+const APP_VERSION = "3.5.0";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -16,7 +16,7 @@ const USERS = {
 // Default page permissions (used as fallback when DB doesn't have a row)
 const DEFAULT_PERMISSIONS = {
   admin:   { displayName: "Admin",                   isAdmin: true,  allowedPages: ["dashboard","installations","repairs","pending","sim-db","stock","accounts","timeline","deletions","user-access"] },
-  akash:   { displayName: "Akash (Field Worker)",    isAdmin: false, allowedPages: ["akash-home","install","repair"] },
+  akash:   { displayName: "Akash (Field Worker)",    isAdmin: false, allowedPages: ["akash-home","akash-deleted","install","repair"] },
   abhinav: { displayName: "Abhinav (Stock Manager)", isAdmin: false, allowedPages: ["stock"] },
 };
 
@@ -2326,6 +2326,137 @@ function renderConnectionError(message) {
   });
 }
 
+function renderAkashDeleted() {
+  const myDeletions = deletionLog.filter(
+    (d) =>
+      d.deletedBy === "akash" &&
+      (d.entityType === "installation" || d.entityType === "maintenance")
+  );
+  const entries = myDeletions.map((d) => {
+    const snap = d.snapshot || {};
+    const isInstall = d.entityType === "installation";
+    return {
+      id: d.id,
+      kind: isInstall ? "install" : "repair",
+      date: d.deletedAt,
+      vehicle: snap.vehicleNo || (d.entityLabel || "").split(" ")[0] || "—",
+      imei: isInstall
+        ? (snap.imeiHistory?.find?.((h) => h.active)?.value || snap.imeiHistory?.[0]?.value || "")
+        : (snap.imeiNo || ""),
+      model: snap.gpsModel || "",
+      sim: snap.simIccid || (snap.iccidHistory?.find?.((h) => h.active)?.value || ""),
+      mac: snap.macId || "",
+      sensor: snap.sensorNo || "",
+      work: isInstall ? "" : [
+        snap.simChange ? "SIM" : null,
+        snap.deviceChange ? "Device" : null,
+        snap.deviceOutForRepair ? "Device→Service" : null,
+        snap.sensorOutForRepair ? "Sensor→Service" : null,
+      ].filter(Boolean).join(" · ") || snap.otherWorkText || "Repair",
+      reason: d.reason || "",
+      originalDate: snap.createdAt || null,
+    };
+  });
+  entries.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  const tail = (s, n = 6) => {
+    const v = String(s || "");
+    return v.length > n ? "…" + v.slice(-n) : v || "—";
+  };
+
+  app.innerHTML = `
+    ${renderHeader("My Deleted Entries", "History of entries you deleted")}
+    <main class="main">
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <h2>🗑 Deleted Entries</h2>
+            <p class="section-subtitle">Entries you deleted from Akash login. Stock already restored when each was deleted.</p>
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" id="backToHome">← Back</button>
+        </div>
+
+        <div class="summary-grid" style="margin-top: 0.8rem;">
+          <div class="summary-box" style="border-left-color: #ef4444;">
+            <strong>${entries.length}</strong>
+            <span>Total deleted</span>
+          </div>
+          <div class="summary-box" style="border-left-color: #f59e0b;">
+            <strong>${entries.filter(e => e.kind === "install").length}</strong>
+            <span>Installations</span>
+          </div>
+          <div class="summary-box" style="border-left-color: #8b5cf6;">
+            <strong>${entries.filter(e => e.kind === "repair").length}</strong>
+            <span>Repairs</span>
+          </div>
+        </div>
+
+        <div class="entry-list" style="margin-top: 1rem;">
+          ${entries.length === 0 ? `
+            <div class="entry-empty">
+              <div class="entry-empty-icon">🗑</div>
+              <h3>No deleted entries</h3>
+              <p>When you delete an installation or repair, it'll appear here.</p>
+            </div>
+          ` : entries.map((entry) => `
+            <article class="tk-card tk-deleted">
+              <div class="tk-card-head">
+                <span class="tk-pill tk-pill-deleted">${escapeHtml(entry.vehicle)}</span>
+                <span class="tk-chip tk-chip-deleted">🗑 DELETED · ${entry.kind === "install" ? "INSTALL" : "REPAIR"}</span>
+              </div>
+              ${entry.kind === "install" ? `
+                <div class="tk-flow">
+                  <div class="tk-flow-box">
+                    <div class="tk-flow-value">${escapeHtml(tail(entry.imei))}</div>
+                    <div class="tk-flow-label">IMEI</div>
+                  </div>
+                  <div class="tk-flow-connector">
+                    <div class="tk-flow-icon">📡</div>
+                    <div class="tk-flow-icon-label">${escapeHtml(entry.model || "—")}</div>
+                  </div>
+                  <div class="tk-flow-box tk-flow-end">
+                    <div class="tk-flow-value">${escapeHtml(tail(entry.sim))}</div>
+                    <div class="tk-flow-label">SIM</div>
+                  </div>
+                </div>
+                <div class="tk-stats">
+                  ${entry.mac ? `<div class="tk-stat"><span class="tk-stat-icon">🔗</span><span class="tk-stat-label">MAC:</span><span class="tk-stat-value mono">${escapeHtml(entry.mac)}</span></div>` : ""}
+                  ${entry.sensor ? `<div class="tk-stat"><span class="tk-stat-icon">📊</span><span class="tk-stat-label">Sensor:</span><span class="tk-stat-value mono">${escapeHtml(entry.sensor)}</span></div>` : ""}
+                </div>
+              ` : `
+                <div class="tk-stats" style="margin-bottom: 0.4rem;">
+                  <div class="tk-stat tk-stat-full">
+                    <span class="tk-stat-icon">🛠️</span>
+                    <span class="tk-stat-label">Work:</span>
+                    <span class="tk-stat-value" style="white-space:normal;">${escapeHtml(entry.work)}</span>
+                  </div>
+                </div>
+              `}
+              <div class="tk-footer">
+                ${entry.originalDate ? `
+                  <div class="tk-footer-row">
+                    <span class="tk-footer-icon">📅</span>
+                    <span class="tk-footer-label">Created on:</span>
+                    <span class="tk-footer-value">${escapeHtml(formatDateTime(entry.originalDate))}</span>
+                  </div>
+                ` : ""}
+                <div class="tk-footer-row">
+                  <span class="tk-footer-icon">🗑️</span>
+                  <span class="tk-footer-label">Deleted on:</span>
+                  <span class="tk-footer-value">${escapeHtml(formatDateTime(entry.date))}</span>
+                </div>
+              </div>
+              ${entry.reason ? `<div class="tk-reason">⚠️ Reason: ${escapeHtml(entry.reason)}</div>` : ""}
+            </article>
+          `).join("")}
+        </div>
+      </section>
+    </main>
+  `;
+  bindLogout();
+  document.getElementById("backToHome")?.addEventListener("click", () => setView("akash-home"));
+}
+
 function renderAkashHome() {
   const myInstallations = loadInstallations().filter((inst) => inst.createdBy === "akash");
   const myMaintenance = loadMaintenance().filter((record) => record.createdBy === "akash");
@@ -2353,7 +2484,10 @@ function renderAkashHome() {
             <h2>My Entries</h2>
             <p class="section-subtitle">Entries saved from Akash login.</p>
           </div>
-          <button type="button" class="btn btn-secondary btn-sm" id="refreshMine">↻ Refresh</button>
+          <div style="display:flex; gap:0.45rem; flex-wrap:wrap;">
+            <button type="button" class="btn btn-outline btn-sm" id="goDeletedEntries">🗑 My Deleted</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="refreshMine">↻ Refresh</button>
+          </div>
         </div>
         <div class="summary-grid">
           <div class="summary-box summary-info">
@@ -2393,11 +2527,8 @@ function renderAkashHome() {
         </div>
         <div class="entry-list">
           ${(() => {
-            const myDeletions = deletionLog.filter(
-              (d) =>
-                d.deletedBy === "akash" &&
-                (d.entityType === "installation" || d.entityType === "maintenance")
-            );
+            // Deleted entries now have their own dedicated page (akash-deleted).
+            // My Entries shows ONLY live (non-deleted) installations + repairs.
             const entries = [
               ...myInstallations.map((inst) => ({
                 id: inst.id,
@@ -2425,32 +2556,6 @@ function renderAkashHome() {
                 sensorOutForRepair: record.sensorOutForRepair,
                 otherWorkText: record.otherWorkText || "",
               })),
-              ...myDeletions.map((d) => {
-                const snap = d.snapshot || {};
-                const isInstall = d.entityType === "installation";
-                return {
-                  id: d.id,
-                  kind: isInstall ? "install" : "repair",
-                  deleted: true,
-                  date: d.deletedAt,
-                  vehicle: snap.vehicleNo || (d.entityLabel || "").split(" ")[0] || "—",
-                  imei: isInstall
-                    ? (snap.imeiHistory?.find?.((h) => h.active)?.value || snap.imeiHistory?.[0]?.value || "")
-                    : (snap.imeiNo || ""),
-                  model: snap.gpsModel || "",
-                  sim: snap.simIccid || (snap.iccidHistory?.find?.((h) => h.active)?.value || ""),
-                  mac: snap.macId || "",
-                  sensor: snap.sensorNo || "",
-                  work: isInstall ? "" : [
-                    snap.simChange ? "SIM" : null,
-                    snap.deviceChange ? "Device" : null,
-                    snap.deviceOutForRepair ? "Device→Service" : null,
-                    snap.sensorOutForRepair ? "Sensor→Service" : null,
-                  ].filter(Boolean).join(" · ") || snap.otherWorkText || "Repair",
-                  reason: d.reason || "",
-                  originalDate: snap.createdAt || null,
-                };
-              }),
             ];
             entries.sort((a, b) => new Date(b.date) - new Date(a.date));
             const sliced = entries.slice(0, 15);
@@ -2628,6 +2733,7 @@ function renderAkashHome() {
   bindLogout();
   document.getElementById("goInstall")?.addEventListener("click", () => setView("install"));
   document.getElementById("goRepair")?.addEventListener("click", () => setView("repair"));
+  document.getElementById("goDeletedEntries")?.addEventListener("click", () => setView("akash-deleted"));
   document.getElementById("fabInstall")?.addEventListener("click", () => setView("install"));
   document.getElementById("fabRepair")?.addEventListener("click", () => setView("repair"));
   document.getElementById("refreshMine")?.addEventListener("click", async () => {
@@ -5159,32 +5265,46 @@ function renderInstallationsPage() {
         </div>
         <div class="table-wrap installs-table-desktop">
           <table>
-            <thead><tr><th>Date</th><th>Vehicle</th><th>GPS Model</th><th>Primary SIM</th><th>MAC ID</th><th>Sensor</th><th>IMEI History</th><th>SIM History</th><th></th></tr></thead>
+            <thead><tr>
+              <th>IMEI</th>
+              <th>GPS Model</th>
+              <th>Vehicle</th>
+              <th>Secondary No (ICCID)</th>
+              <th>Primary No (Mobile)</th>
+              <th>Sensor No</th>
+              <th>MAC ID</th>
+              <th>Date</th>
+              <th>Actions</th>
+            </tr></thead>
             <tbody>
               ${
                 filtered.length
                   ? filtered
                       .map((i) => {
+                        const currentImei = getCurrentImei(i) || "—";
                         const currentSim = getCurrentSim(i);
-                        const resolved = resolvePrimarySim(currentSim);
-                        const isPending = currentSim && resolved === currentSim && !sims.find((s) => (s.primaryNumber || "").toLowerCase() === currentSim.toLowerCase());
-                        // Pending primary if simHistory value is a 20-digit ICCID
-                        // and we couldn't find a matching primary in the sims table.
+                        const secondary = i.secondarySim || (digitsOnly(currentSim).length >= 18 ? currentSim : "");
+                        const resolvedPrimary = (() => {
+                          if (currentSim && digitsOnly(currentSim).length < 18) return currentSim;
+                          return resolvePrimarySim(currentSim) || "";
+                        })();
+                        const isPending = resolvedPrimary && resolvedPrimary === currentSim && !sims.find((s) => (s.primaryNumber || "").toLowerCase() === currentSim.toLowerCase());
                         const looksIccid = currentSim && digitsOnly(currentSim).length >= 18;
-                        const pendingPill = looksIccid ? `<span class="badge badge-warn" title="Primary not yet known — admin needs to fill it via Pending Work">pending primary</span>` : "";
+                        const pendingPill = looksIccid && !resolvedPrimary ? `<span class="badge badge-warn" title="Primary not yet known">pending</span>` : "";
                         return `
                 <tr>
-                  <td class="date-cell">${escapeHtml(formatDateTime(i.createdAt))}</td>
-                  <td>${escapeHtml(i.vehicleNo)}</td>
+                  <td class="mono">${escapeHtml(currentImei)}</td>
                   <td>${escapeHtml(i.gpsModel)}</td>
-                  <td class="mono">${escapeHtml(resolved || "—")} ${pendingPill}</td>
-                  <td class="mono">${escapeHtml(i.macId)}</td>
-                  <td class="mono">${escapeHtml(i.sensorNo)}</td>
-                  <td class="history-cell">${historyList(i.imeiHistory)}</td>
-                  <td class="history-cell">${simHistoryCell(i)}</td>
+                  <td><strong>${escapeHtml(i.vehicleNo)}</strong></td>
+                  <td class="mono">${escapeHtml(secondary || "—")}</td>
+                  <td class="mono">${escapeHtml(resolvedPrimary || "—")} ${pendingPill}</td>
+                  <td class="mono">${escapeHtml(i.sensorNo || "—")}</td>
+                  <td class="mono">${escapeHtml(i.macId || "—")}</td>
+                  <td class="date-cell">${escapeHtml(formatDateTime(i.createdAt))}</td>
                   <td class="row-actions">
-                    <button type="button" class="btn btn-outline btn-sm view-tl-btn" data-id="${i.id}" title="View vehicle timeline">📅 Timeline</button>
-                    <button type="button" class="btn btn-outline btn-sm edit-btn" data-id="${i.id}">Edit</button>
+                    <button type="button" class="btn btn-outline btn-sm view-tl-btn" data-id="${i.id}" title="View vehicle timeline">📅</button>
+                    <button type="button" class="btn btn-outline btn-sm edit-btn" data-id="${i.id}" title="Edit">✎</button>
+                    <button type="button" class="btn btn-danger btn-sm admin-delete-install-btn" data-id="${i.id}" title="Delete installation (restores stock)">🗑</button>
                   </td>
                 </tr>`;
                       })
@@ -5273,6 +5393,7 @@ function renderInstallationsPage() {
                       <div class="tk-actions">
                         <button type="button" class="btn btn-outline btn-sm view-tl-btn" data-id="${i.id}">📅 Timeline</button>
                         <button type="button" class="btn btn-primary btn-sm edit-btn" data-id="${i.id}">✎ Edit</button>
+                        <button type="button" class="btn btn-danger btn-sm admin-delete-install-btn" data-id="${i.id}" title="Delete installation">🗑 Delete</button>
                       </div>
                     </article>
                   `;
@@ -5315,6 +5436,9 @@ function renderInstallationsPage() {
   });
   app.querySelectorAll(".view-tl-btn").forEach((btn) => {
     btn.addEventListener("click", () => openVehicleTimelineModal(btn.dataset.id));
+  });
+  app.querySelectorAll(".admin-delete-install-btn").forEach((btn) => {
+    btn.addEventListener("click", () => deleteAkashInstallation(btn.dataset.id));
   });
 }
 
@@ -8578,6 +8702,9 @@ function render() {
       break;
     case "akash-home":
       renderAkashHome();
+      break;
+    case "akash-deleted":
+      renderAkashDeleted();
       break;
     case "install":
       renderInstallForm();
