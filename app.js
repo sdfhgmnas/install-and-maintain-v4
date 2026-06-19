@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.5.6";
+const APP_VERSION = "3.5.8";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -1625,7 +1625,253 @@ function horizontalBarChart(items, opts = {}) {
 
 let _activeScanner = null;
 
-async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Point camera at the barcode or QR code.", onScan, scanContext = "generic" }) {
+async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Point camera at the barcode or QR code.", onScan }) {
+  // Use the SAME proven native BarcodeDetector setup as the bulk scanner
+  // (Abhinav's workflow). Falls back to html5-qrcode if BarcodeDetector
+  // is unavailable. Stops after first successful detection.
+  const hasNativeDetector =
+    typeof window.BarcodeDetector !== "undefined" &&
+    window.isSecureContext;
+
+  modal.innerHTML = `
+    <h3>${escapeHtml(title)}</h3>
+    <p class="modal-desc">${escapeHtml(hint)}</p>
+
+    <div class="qr-reader-wrap bulk-scan-viewfinder">
+      <video id="singleScanVideo" autoplay playsinline muted></video>
+      <div class="qr-scan-line"></div>
+      <div class="qr-controls">
+        <button type="button" class="qr-icon-btn" id="singleTorchBtn" style="display:none;" aria-label="Torch">🔦</button>
+      </div>
+      <div class="qr-status" id="qrStatus">Initialising camera…</div>
+    </div>
+
+    <div class="manual-entry-block" style="margin-top: 0.7rem;">
+      <label for="manualScanInput">Or type the number manually:</label>
+      <div class="input-with-scan" style="margin-top: 0.4rem;">
+        <input type="text" id="manualScanInput" autocomplete="off" inputmode="numeric" placeholder="Paste or type the number" />
+        <button type="button" class="btn btn-primary btn-sm" id="manualScanOk">OK</button>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary btn-block" data-act="cancel">Close</button>
+    </div>
+  `;
+  modal.classList.add("modal-wide");
+  modalOverlay.classList.remove("hidden");
+
+  let scanActive = true;
+  let currentStream = null;
+
+  const setStatus = (t) => {
+    const s = document.getElementById("qrStatus");
+    if (s) s.textContent = t;
+  };
+
+  const cleanup = () => {
+    scanActive = false;
+    if (currentStream) {
+      try { currentStream.getTracks().forEach((t) => t.stop()); } catch {}
+      currentStream = null;
+    }
+    closeModal();
+  };
+
+  const handleScan = (raw) => {
+    if (!scanActive) return;
+    const value = String(raw || "").trim();
+    if (!value) return;
+    scanActive = false;
+    try { playBeep(880, 0.08); } catch {}
+    try { navigator.vibrate && navigator.vibrate(60); } catch {}
+    cleanup();
+    try { onScan(value); } catch (e) { console.error("onScan handler failed:", e); }
+  };
+
+  modal.querySelector('[data-act="cancel"]').onclick = cleanup;
+  modalOverlay.onclick = (e) => { if (e.target === modalOverlay) cleanup(); };
+
+  const okBtn = document.getElementById("manualScanOk");
+  const manualInput = document.getElementById("manualScanInput");
+  okBtn?.addEventListener("click", () => {
+    const v = manualInput.value.trim();
+    if (v) handleScan(v);
+  });
+  manualInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      okBtn?.click();
+    }
+  });
+
+  if (hasNativeDetector) {
+    await initNativeSingleScanner(handleScan, setStatus, (s) => { currentStream = s; }, () => scanActive);
+  } else {
+    await initFallbackSingleScanner(handleScan, setStatus);
+  }
+}
+
+/* Native BarcodeDetector single-shot — uses same proven path as bulk scanner */
+async function initNativeSingleScanner(onDetect, setStatus, captureStream, isActive) {
+  try {
+    let formats = [];
+    try { formats = await window.BarcodeDetector.getSupportedFormats(); } catch {}
+    const detector = formats.length
+      ? new window.BarcodeDetector({ formats })
+      : new window.BarcodeDetector();
+
+    const video = document.getElementById("singleScanVideo");
+    if (!video) { setStatus("Video element not found"); return; }
+
+    setStatus("Requesting camera permission…");
+
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+        audio: false,
+      });
+    } catch (err) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: "environment" } },
+          audio: false,
+        });
+      } catch (err2) {
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const cams = devices.filter((d) => d.kind === "videoinput");
+          const back = cams.find((c) => /back|rear|environment|world|wide(?!.*front)/i.test(c.label || ""));
+          if (back) {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: { deviceId: { exact: back.deviceId } },
+              audio: false,
+            });
+          } else {
+            setStatus("❌ Back camera not found. Use manual entry.");
+            return;
+          }
+        } catch (err3) {
+          setStatus("❌ Camera permission denied or unavailable");
+          return;
+        }
+      }
+    }
+
+    captureStream(stream);
+    video.srcObject = stream;
+    video.muted = true;
+    video.setAttribute("playsinline", "");
+    try { await video.play(); } catch {}
+
+    setStatus("📷 Scanner ready — point at barcode");
+
+    const track = stream.getVideoTracks()[0];
+    if (track) {
+      try {
+        const capabilities = track.getCapabilities?.() || {};
+        const advanced = [];
+        if (capabilities.focusMode && capabilities.focusMode.includes("continuous")) {
+          advanced.push({ focusMode: "continuous" });
+        }
+        if (capabilities.zoom) {
+          const z = Math.min(Math.max(1.5, capabilities.zoom.min || 1), capabilities.zoom.max || 1);
+          advanced.push({ zoom: z });
+        }
+        if (advanced.length) await track.applyConstraints({ advanced }).catch(() => {});
+
+        if (capabilities.torch) {
+          const torchBtn = document.getElementById("singleTorchBtn");
+          if (torchBtn) {
+            torchBtn.style.display = "flex";
+            let torchOn = false;
+            torchBtn.addEventListener("click", async () => {
+              torchOn = !torchOn;
+              try {
+                await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+                torchBtn.classList.toggle("active", torchOn);
+              } catch {}
+            });
+          }
+        }
+      } catch (e) { console.warn("Camera tweaks failed:", e); }
+    }
+
+    let scanErrCount = 0;
+    const scanLoop = async () => {
+      if (!isActive()) return;
+      try {
+        if (video.readyState >= 2 && video.videoWidth > 0) {
+          const barcodes = await detector.detect(video);
+          if (barcodes && barcodes.length > 0) {
+            const value = (barcodes[0].rawValue || "").trim();
+            if (value) {
+              onDetect(value);
+              return;
+            }
+          }
+        }
+        scanErrCount = 0;
+      } catch (e) {
+        scanErrCount++;
+        if (scanErrCount === 1) console.warn("Detector error:", e);
+        if (scanErrCount > 30) {
+          setStatus("Scanner having trouble — type manually below");
+          return;
+        }
+      }
+      requestAnimationFrame(scanLoop);
+    };
+    scanLoop();
+  } catch (err) {
+    console.error("Single scanner native setup failed:", err);
+    setStatus("❌ Camera unavailable — type manually below");
+  }
+}
+
+/* Fallback for browsers without BarcodeDetector */
+async function initFallbackSingleScanner(onDetect, setStatus) {
+  const HQR = window.Html5Qrcode;
+  if (!HQR) { setStatus("Scanner unavailable — type manually below."); return; }
+  const HQRFormats = window.Html5QrcodeSupportedFormats;
+  const allFormats = HQRFormats ? [
+    HQRFormats.CODE_128, HQRFormats.CODE_39, HQRFormats.CODE_93,
+    HQRFormats.EAN_13, HQRFormats.QR_CODE, HQRFormats.DATA_MATRIX,
+  ] : undefined;
+
+  const video = document.getElementById("singleScanVideo");
+  if (video) video.style.display = "none";
+  const wrap = document.querySelector(".bulk-scan-viewfinder");
+  if (wrap) {
+    const div = document.createElement("div");
+    div.id = "singleScanDiv";
+    div.style.width = "100%";
+    wrap.insertBefore(div, wrap.firstChild);
+  }
+
+  setTimeout(async () => {
+    try {
+      const scanner = new HQR("singleScanDiv", { verbose: false, formatsToSupport: allFormats });
+      await scanner.start(
+        { facingMode: "environment" },
+        { fps: 15, qrbox: { width: 280, height: 120 } },
+        async (decodedText) => {
+          try { await scanner.stop(); } catch {}
+          try { await scanner.clear(); } catch {}
+          onDetect(decodedText);
+        },
+        () => {}
+      );
+      setStatus("📷 Scanner ready (fallback) — point at barcode");
+    } catch (e) {
+      console.error("Fallback scanner failed:", e);
+      setStatus("❌ Scanner failed — type manually below");
+    }
+  }, 100);
+}
+
+async function _OLD_openBarcodeScannerModal_DISABLED({ title = "📷 Scan Barcode", hint = "Point camera at the barcode or QR code.", onScan }) {
   // Use the low-level Html5Qrcode API directly so we can force the BACK
   // camera (facingMode: "environment") instead of the front selfie cam.
   const HQR = window.Html5Qrcode;
@@ -1726,21 +1972,13 @@ async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Po
         HQRFormats.QR_CODE,
         HQRFormats.DATA_MATRIX,
         HQRFormats.PDF_417,
-        HQRFormats.AZTEC,
-      ].filter(Boolean)
+      ]
     : undefined;
 
   const config = {
-    fps: scanContext === "sim" ? 10 : 15,   // SIM = lower fps for more careful detection
+    fps: 15,                                // higher framerate for snappier detection
     qrbox: (vw, vh) => {
-      // SIM barcodes are SHORTER than IMEI — narrower qrbox helps user
-      // align ONLY the barcode without including the adjacent QR code.
-      if (scanContext === "sim") {
-        const w = Math.min(vw * 0.78, 280);
-        const h = Math.min(vh * 0.32, 100);
-        return { width: Math.floor(w), height: Math.floor(h) };
-      }
-      // IMEI / generic: wide and short for long Code 128
+      // For long Code 128 barcodes, we want a WIDE / SHORT scan box
       const w = Math.min(vw * 0.92, 360);
       const h = Math.min(vh * 0.45, 140);
       return { width: Math.floor(w), height: Math.floor(h) };
@@ -3077,9 +3315,10 @@ function renderInstallForm() {
 
           <div class="field">
             <label for="instImei">IMEI No <span class="required">*</span></label>
-            <div class="input-with-scan">
-              <input type="text" id="instImei" required placeholder="e.g. 867530012345678" autocomplete="off" inputmode="numeric" />
+            <div class="input-with-scan autocomplete-wrap">
+              <input type="text" id="instImei" required placeholder="Type last 4-5 digits or full IMEI" autocomplete="off" inputmode="numeric" />
               <button type="button" class="scan-btn" id="scanImei" aria-label="Scan IMEI barcode">📷</button>
+              <div class="autocomplete-dropdown" id="instImeiDropdown"></div>
             </div>
             <p class="hint" id="instImeiHint"></p>
           </div>
@@ -3089,9 +3328,10 @@ function renderInstallForm() {
           </div>
           <div class="field full-width">
             <label for="instSim">SIM ICCID (20-digit, printed on the SIM card) <span class="required">*</span></label>
-            <div class="input-with-scan">
-              <input type="text" id="instSim" required placeholder="e.g. 89918720507069156677" autocomplete="off" inputmode="numeric" />
+            <div class="input-with-scan autocomplete-wrap">
+              <input type="text" id="instSim" required placeholder="Type last 4-5 digits or full ICCID" autocomplete="off" inputmode="numeric" />
               <button type="button" class="scan-btn" id="scanSim" aria-label="Scan SIM ICCID barcode">📷</button>
+              <div class="autocomplete-dropdown" id="instSimDropdown"></div>
             </div>
             <p class="hint" id="instSimHint">Wahi number daalo jo SIM card pe printed hai (long 20-digit number). Primary number admin ke SIM database se automatic link ho jaayega.</p>
           </div>
@@ -3172,8 +3412,7 @@ function renderInstallForm() {
   document.getElementById("scanSim")?.addEventListener("click", () => {
     openBarcodeScannerModal({
       title: "📷 Scan SIM Barcode",
-      hint: "⚠️ Sirf BARCODE align karo (QR code nahi). Camera close mat lana — 10-15cm rakho.",
-      scanContext: "sim",
+      hint: "SIM card pe printed long number ya barcode pe camera point karo.",
       onScan: (val) => {
         const cleaned = val.replace(/\D/g, "") || val.trim();
         const input = document.getElementById("instSim");
@@ -3184,12 +3423,78 @@ function renderInstallForm() {
     });
   });
 
+  // Close autocomplete dropdowns on outside click
+  document.addEventListener("click", function _closeAcDropdowns(e) {
+    if (!e.target.closest(".autocomplete-wrap")) {
+      document.getElementById("instImeiDropdown")?.classList.remove("show");
+      document.getElementById("instSimDropdown")?.classList.remove("show");
+    }
+  });
+
+  // ===== IMEI input — autocomplete dropdown + auto-detect from stock =====
+  function showImeiSuggestions(query) {
+    const dropdown = document.getElementById("instImeiDropdown");
+    if (!dropdown) return;
+    const q = String(query || "").trim().toLowerCase();
+    if (q.length < 3) {
+      dropdown.classList.remove("show");
+      dropdown.innerHTML = "";
+      return;
+    }
+    // Search stock items where IMEI ends-with OR contains the query
+    const matches = stockItems.filter((it) => {
+      if (categoryKind(it.category) !== "gps") return false;
+      if (it.quantity <= 0) return false; // only in-stock items
+      const imei = (it.metadata?.imei || "").toLowerCase();
+      return imei && (imei.endsWith(q) || imei.includes(q));
+    }).slice(0, 8); // cap at 8 suggestions
+    if (matches.length === 0) {
+      dropdown.classList.remove("show");
+      dropdown.innerHTML = "";
+      return;
+    }
+    const rows = matches.map((it) => {
+      const imei = it.metadata?.imei || "";
+      const idx = imei.toLowerCase().lastIndexOf(q);
+      const before = escapeHtml(imei.slice(0, idx));
+      const match = escapeHtml(imei.slice(idx, idx + q.length));
+      const after = escapeHtml(imei.slice(idx + q.length));
+      return `
+        <div class="autocomplete-item" data-value="${escapeHtml(imei)}" data-name="${escapeHtml(it.name || '')}">
+          <div class="ac-main">
+            <span class="ac-value mono">${before}<strong>${match}</strong>${after}</span>
+            <span class="ac-name">${escapeHtml(it.name || it.category || "GPS")}</span>
+          </div>
+          <div class="ac-meta">📦 Stock: ${it.quantity}</div>
+        </div>
+      `;
+    }).join("");
+    dropdown.innerHTML = rows;
+    dropdown.classList.add("show");
+    // Wire click to fill
+    dropdown.querySelectorAll(".autocomplete-item").forEach((row) => {
+      row.addEventListener("click", () => {
+        const fullImei = row.dataset.value;
+        const itemName = row.dataset.name;
+        const imeiInput = document.getElementById("instImei");
+        imeiInput.value = fullImei;
+        dropdown.classList.remove("show");
+        // Trigger input event for auto-detect hint to update
+        imeiInput.dispatchEvent(new Event("input"));
+        showToast(`✓ Selected from stock: ${itemName}`);
+      });
+    });
+  }
+
   // ===== Auto-detect IMEI from stock database =====
-  // When IMEI typed/scanned, check if found in stock + auto-select GPS Model.
   document.getElementById("instImei")?.addEventListener("input", (e) => {
     const v = e.target.value.trim();
     const h = document.getElementById("instImeiHint");
     if (!h) return;
+
+    // Show autocomplete dropdown for partial matches (3+ digits)
+    showImeiSuggestions(v);
+
     if (!v || v.length < 8) {
       h.textContent = "";
       h.className = "hint";
@@ -3198,13 +3503,11 @@ function renderInstallForm() {
     const matched = findStockByValue(v);
     const gpsMatch = matched.find((it) => categoryKind(it.category) === "gps");
     if (gpsMatch) {
-      // Detect model type from category/name
       const nameUpper = (gpsMatch.name + " " + (gpsMatch.category || "")).toUpperCase();
       let detectedType = "FMB";
       if (nameUpper.includes("NORMAL")) detectedType = "Normal";
       else if (nameUpper.includes("FMC")) detectedType = "FMC";
       else if (nameUpper.includes("FMB")) detectedType = "FMB";
-      // Auto-select the segmented control
       if (typeof applyGpsType === "function") applyGpsType(detectedType);
       h.innerHTML = `<span class="hint-found">✓ Found in database — Auto-selected: <strong>${escapeHtml(detectedType)}</strong> (${escapeHtml(gpsMatch.name)})</span>`;
       h.className = "hint hint-ok";
@@ -3217,12 +3520,99 @@ function renderInstallForm() {
     }
   });
 
+  // ===== SIM input — autocomplete dropdown =====
+  function showSimSuggestions(query) {
+    const dropdown = document.getElementById("instSimDropdown");
+    if (!dropdown) return;
+    const q = String(query || "").trim().toLowerCase();
+    if (q.length < 3) {
+      dropdown.classList.remove("show");
+      dropdown.innerHTML = "";
+      return;
+    }
+    // Search SIM-category stock + sims DB
+    const stockMatches = stockItems.filter((it) => {
+      if (categoryKind(it.category) !== "sim") return false;
+      if (it.quantity <= 0) return false;
+      const m = it.metadata || {};
+      const fields = [m.imei || "", m.secondary || "", m.primary || ""];
+      return fields.some((f) => f && (f.toLowerCase().endsWith(q) || f.toLowerCase().includes(q)));
+    }).slice(0, 5);
+    const simDbMatches = sims.filter((s) => {
+      const sec = (s.secondaryNumber || "").toLowerCase();
+      const pri = (s.primaryNumber || "").toLowerCase();
+      return (sec && sec.endsWith(q)) || (pri && pri.endsWith(q));
+    }).slice(0, 5);
+    const allRows = [];
+    // Stock items first
+    for (const it of stockMatches) {
+      const m = it.metadata || {};
+      const iccid = m.secondary || m.imei || "";
+      if (!iccid) continue;
+      const idx = iccid.toLowerCase().lastIndexOf(q);
+      const before = escapeHtml(iccid.slice(0, idx));
+      const match = escapeHtml(iccid.slice(idx, idx + q.length));
+      const after = escapeHtml(iccid.slice(idx + q.length));
+      allRows.push(`
+        <div class="autocomplete-item" data-value="${escapeHtml(iccid)}" data-name="${escapeHtml(it.name || '')}">
+          <div class="ac-main">
+            <span class="ac-value mono">${before}<strong>${match}</strong>${after}</span>
+            <span class="ac-name">${escapeHtml(it.name || "SIM")}</span>
+          </div>
+          <div class="ac-meta">📦 Stock: ${it.quantity}</div>
+        </div>
+      `);
+    }
+    // SIM DB matches (if not already shown)
+    for (const s of simDbMatches) {
+      const sec = s.secondaryNumber || "";
+      const pri = s.primaryNumber || "";
+      const display = sec || pri;
+      if (!display) continue;
+      if (allRows.some((r) => r.includes(`data-value="${escapeHtml(display)}"`))) continue;
+      const idx = display.toLowerCase().lastIndexOf(q);
+      const before = escapeHtml(display.slice(0, idx));
+      const match = escapeHtml(display.slice(idx, idx + q.length));
+      const after = escapeHtml(display.slice(idx + q.length));
+      allRows.push(`
+        <div class="autocomplete-item" data-value="${escapeHtml(display)}" data-name="SIM DB">
+          <div class="ac-main">
+            <span class="ac-value mono">${before}<strong>${match}</strong>${after}</span>
+            <span class="ac-name">${pri ? `Primary: ${escapeHtml(pri)}` : "SIM Database"}</span>
+          </div>
+          <div class="ac-meta">📝 DB</div>
+        </div>
+      `);
+    }
+    if (allRows.length === 0) {
+      dropdown.classList.remove("show");
+      dropdown.innerHTML = "";
+      return;
+    }
+    dropdown.innerHTML = allRows.join("");
+    dropdown.classList.add("show");
+    dropdown.querySelectorAll(".autocomplete-item").forEach((row) => {
+      row.addEventListener("click", () => {
+        const fullVal = row.dataset.value;
+        const simInput = document.getElementById("instSim");
+        simInput.value = fullVal;
+        dropdown.classList.remove("show");
+        simInput.dispatchEvent(new Event("input"));
+        showToast(`✓ Selected: ${row.dataset.name}`);
+      });
+    });
+  }
+
   // Live SIM lookup as Akash types the ICCID — shows whether the primary
   // is already known so he doesn't worry about the long number.
   document.getElementById("instSim")?.addEventListener("input", (e) => {
     const v = e.target.value.trim();
     const h = document.getElementById("instSimHint");
     if (!h) return;
+
+    // Show autocomplete dropdown for partial matches
+    showSimSuggestions(v);
+
     if (!v) {
       h.textContent = "Wahi number daalo jo SIM card pe printed hai (long 20-digit number). Primary number admin ke SIM database se automatic link ho jaayega.";
       h.className = "hint";
