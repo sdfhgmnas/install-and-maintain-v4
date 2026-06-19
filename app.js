@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.5.2";
+const APP_VERSION = "3.5.4";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -406,6 +406,46 @@ function getInstallTasks(inst) {
 function isInstallTaskDone(inst, type) {
   const t = getInstallTasks(inst)[type];
   return Boolean(t && t.completedAt);
+}
+
+/* Live status — stored inside tasks jsonb under live_status key.
+   Returns "live", "offline", or "unknown" (never set). */
+function getInstallLiveStatus(inst) {
+  const ls = (inst.tasks || {}).live_status;
+  if (!ls) return "unknown";
+  if (ls.isLive === true) return "live";
+  if (ls.isLive === false) return "offline";
+  return "unknown";
+}
+
+function getInstallLiveMeta(inst) {
+  const ls = (inst.tasks || {}).live_status || {};
+  return {
+    updatedAt: ls.updatedAt || null,
+    updatedBy: ls.updatedBy || null,
+  };
+}
+
+async function updateInstallLiveStatus(installId, isLive) {
+  const inst = installations.find((i) => i.id === installId);
+  if (!inst) return;
+  const tasks = { ...(inst.tasks || {}) };
+  tasks.live_status = {
+    isLive: isLive,
+    updatedAt: new Date().toISOString(),
+    updatedBy: currentUser || "admin",
+  };
+  const updated = { ...inst, tasks };
+  try {
+    await updateInstallation(updated);
+    const idx = installations.findIndex((i) => i.id === installId);
+    if (idx >= 0) installations[idx] = updated;
+    render();
+    const label = isLive === true ? "Live" : isLive === false ? "Offline" : "Unknown";
+    showToast(`✓ ${inst.vehicleNo} marked ${label}.`);
+  } catch (err) {
+    showToast(err.message || "Failed to update status.", true);
+  }
 }
 
 function getPendingActionRows() {
@@ -2134,6 +2174,8 @@ async function logout() {
   view = "login";
   searchQuery = "";
   lastSyncedAt = null;
+  _scrollMemo = {};
+  _lastRenderedView = null;
   try { history.replaceState({ view: "login" }, "", "#login"); } catch {}
   render();
 }
@@ -4045,6 +4087,55 @@ async function consumeStockByValue(value, installationId, vehicleNo) {
   return count;
 }
 
+function openLiveStatusModal(installId) {
+  const inst = installations.find((i) => i.id === installId);
+  if (!inst) return;
+  const currentStatus = getInstallLiveStatus(inst);
+  const meta = getInstallLiveMeta(inst);
+  const lastUpdate = meta.updatedAt
+    ? `<p class="modal-desc">Last updated: ${escapeHtml(formatDateTime(meta.updatedAt))} by ${escapeHtml(meta.updatedBy || "?")}</p>`
+    : `<p class="modal-desc">Status has never been set for this vehicle.</p>`;
+
+  modal.innerHTML = `
+    <h3>📡 Vehicle Live Status — ${escapeHtml(inst.vehicleNo)}</h3>
+    ${lastUpdate}
+    <div class="live-status-choices">
+      <button type="button" class="live-status-choice live-choice-live ${currentStatus === "live" ? "active" : ""}" data-set="live">
+        <div class="live-choice-icon">🟢</div>
+        <div class="live-choice-label">Live</div>
+        <div class="live-choice-desc">Vehicle online & sending data</div>
+      </button>
+      <button type="button" class="live-status-choice live-choice-offline ${currentStatus === "offline" ? "active" : ""}" data-set="offline">
+        <div class="live-choice-icon">🔴</div>
+        <div class="live-choice-label">Offline</div>
+        <div class="live-choice-desc">Device not transmitting</div>
+      </button>
+      <button type="button" class="live-status-choice live-choice-unknown ${currentStatus === "unknown" ? "active" : ""}" data-set="unknown">
+        <div class="live-choice-icon">⚪</div>
+        <div class="live-choice-label">Unknown</div>
+        <div class="live-choice-desc">Not verified yet</div>
+      </button>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
+    </div>
+  `;
+  modalOverlay.classList.remove("hidden");
+
+  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+  modal.querySelectorAll(".live-status-choice").forEach((btn) => {
+    btn.onclick = async () => {
+      const choice = btn.dataset.set;
+      let newVal;
+      if (choice === "live") newVal = true;
+      else if (choice === "offline") newVal = false;
+      else newVal = null;
+      closeModal();
+      await updateInstallLiveStatus(installId, newVal);
+    };
+  });
+}
+
 function openEditInstallation(id) {
   const inst = loadInstallations().find((i) => i.id === id);
   if (!inst) return;
@@ -5399,6 +5490,9 @@ function renderInstallationsPage() {
   const recentInstalls = allInstalls.filter(
     (i) => new Date(i.createdAt) >= new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
   ).length;
+  const liveCount = allInstalls.filter((i) => getInstallLiveStatus(i) === "live").length;
+  const offlineCount = allInstalls.filter((i) => getInstallLiveStatus(i) === "offline").length;
+  const unknownCount = allInstalls.filter((i) => getInstallLiveStatus(i) === "unknown").length;
 
   app.innerHTML = `
     ${renderHeader("Installations", `${allInstalls.length} vehicles registered`)}
@@ -5406,8 +5500,10 @@ function renderInstallationsPage() {
       ${renderAdminNav("installations")}
       <div class="summary-grid">
         <div class="summary-box summary-info"><strong>${allInstalls.length}</strong><span>Total installs</span></div>
-        <div class="summary-box summary-ok"><strong>${recentInstalls}</strong><span>This week</span></div>
-        <div class="summary-box summary-purple"><strong>${withSecSim}</strong><span>With Secondary No</span></div>
+        <div class="summary-box summary-ok"><strong>${liveCount}</strong><span>🟢 Live</span></div>
+        <div class="summary-box summary-danger"><strong>${offlineCount}</strong><span>🔴 Offline</span></div>
+        <div class="summary-box summary-warn"><strong>${unknownCount}</strong><span>⚪ Unknown</span></div>
+        <div class="summary-box summary-purple"><strong>${recentInstalls}</strong><span>This week</span></div>
       </div>
       <section class="card">
         <div class="section-heading">
@@ -5443,6 +5539,7 @@ function renderInstallationsPage() {
               <th>Primary No (Mobile)</th>
               <th>Sensor No</th>
               <th>MAC ID</th>
+              <th>Status</th>
               <th>Date</th>
               <th>Actions</th>
             </tr></thead>
@@ -5461,6 +5558,12 @@ function renderInstallationsPage() {
                         const isPending = resolvedPrimary && resolvedPrimary === currentSim && !sims.find((s) => (s.primaryNumber || "").toLowerCase() === currentSim.toLowerCase());
                         const looksIccid = currentSim && digitsOnly(currentSim).length >= 18;
                         const pendingPill = looksIccid && !resolvedPrimary ? `<span class="badge badge-warn" title="Primary not yet known">pending</span>` : "";
+                        const liveStatus = getInstallLiveStatus(i);
+                        const liveBadge = liveStatus === "live"
+                          ? `<span class="live-badge live-yes">🟢 Live</span>`
+                          : liveStatus === "offline"
+                          ? `<span class="live-badge live-no">🔴 Offline</span>`
+                          : `<span class="live-badge live-unknown">⚪ Unknown</span>`;
                         return `
                 <tr>
                   <td class="mono">${escapeHtml(currentImei)}</td>
@@ -5470,16 +5573,18 @@ function renderInstallationsPage() {
                   <td class="mono">${escapeHtml(resolvedPrimary || "—")} ${pendingPill}</td>
                   <td class="mono">${escapeHtml(i.sensorNo || "—")}</td>
                   <td class="mono">${escapeHtml(i.macId || "—")}</td>
+                  <td>${liveBadge}</td>
                   <td class="date-cell">${escapeHtml(formatDateTime(i.createdAt))}</td>
                   <td class="row-actions">
                     <button type="button" class="btn btn-outline btn-sm view-tl-btn" data-id="${i.id}" title="View vehicle timeline">📅</button>
                     <button type="button" class="btn btn-outline btn-sm edit-btn" data-id="${i.id}" title="Edit">✎</button>
+                    <button type="button" class="btn btn-outline btn-sm live-toggle-btn" data-id="${i.id}" title="Set Live status">🟢/🔴</button>
                     <button type="button" class="btn btn-danger btn-sm admin-delete-install-btn" data-id="${i.id}" title="Delete installation (restores stock)">🗑</button>
                   </td>
                 </tr>`;
                       })
                       .join("")
-                  : `<tr class="empty-row"><td colspan="9">No installations found.</td></tr>`
+                  : `<tr class="empty-row"><td colspan="10">No installations found.</td></tr>`
               }
             </tbody>
           </table>
@@ -5503,6 +5608,12 @@ function renderInstallationsPage() {
                     <article class="tk-card">
                       <div class="tk-card-head">
                         <span class="tk-pill">${escapeHtml(i.vehicleNo)}</span>
+                        ${(() => {
+                          const liveStatus = getInstallLiveStatus(i);
+                          if (liveStatus === "live") return `<span class="live-badge live-yes">🟢 Live</span>`;
+                          if (liveStatus === "offline") return `<span class="live-badge live-no">🔴 Offline</span>`;
+                          return `<span class="live-badge live-unknown">⚪ Status?</span>`;
+                        })()}
                         <button type="button" class="tk-arrow view-tl-btn" data-id="${i.id}" title="View timeline">›</button>
                       </div>
                       <div class="tk-flow">
@@ -5563,6 +5674,7 @@ function renderInstallationsPage() {
                       <div class="tk-actions">
                         <button type="button" class="btn btn-outline btn-sm view-tl-btn" data-id="${i.id}">📅 Timeline</button>
                         <button type="button" class="btn btn-primary btn-sm edit-btn" data-id="${i.id}">✎ Edit</button>
+                        <button type="button" class="btn btn-outline btn-sm live-toggle-btn" data-id="${i.id}">🟢/🔴 Status</button>
                         <button type="button" class="btn btn-danger btn-sm admin-delete-install-btn" data-id="${i.id}" title="Delete installation">🗑 Delete</button>
                       </div>
                     </article>
@@ -5609,6 +5721,9 @@ function renderInstallationsPage() {
   });
   app.querySelectorAll(".admin-delete-install-btn").forEach((btn) => {
     btn.addEventListener("click", () => deleteAkashInstallation(btn.dataset.id));
+  });
+  app.querySelectorAll(".live-toggle-btn").forEach((btn) => {
+    btn.addEventListener("click", () => openLiveStatusModal(btn.dataset.id));
   });
 }
 
@@ -8865,7 +8980,17 @@ function openSupplierManager() {
   });
 }
 
+let _lastRenderedView = null;
+let _scrollMemo = {}; // view -> scrollY
+
 function render() {
+  // Save scroll position of the view we're leaving (same view = mid-action re-render)
+  const prevScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+  if (_lastRenderedView) {
+    _scrollMemo[_lastRenderedView] = prevScrollY;
+  }
+  const sameView = _lastRenderedView === view;
+
   switch (view) {
     case "login":
       renderLogin();
@@ -8921,6 +9046,25 @@ function render() {
       break;
     default:
       renderLogin();
+  }
+
+  // Restore scroll position after render
+  _lastRenderedView = view;
+  if (sameView) {
+    // Mid-action re-render — restore previous scroll position
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: prevScrollY, behavior: "instant" });
+    });
+  } else if (_scrollMemo[view] !== undefined) {
+    // View change — restore scroll if we've been here before
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: _scrollMemo[view] || 0, behavior: "instant" });
+    });
+  } else {
+    // New view — start at top
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: "instant" });
+    });
   }
 }
 
