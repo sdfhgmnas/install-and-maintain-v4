@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.5.0";
+const APP_VERSION = "3.5.2";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -3957,48 +3957,218 @@ function showImportReport(errors) {
 
 /* ---------------- Installation editing (admin) ---------------- */
 
+/* ============================================================
+   STOCK RESTORE / CONSUME by value (for admin edit flow)
+   ============================================================ */
+function findStockByValue(value) {
+  const norm = String(value || "").trim().toLowerCase();
+  if (!norm) return [];
+  return stockItems.filter((it) => {
+    const m = it.metadata || {};
+    return (
+      (m.imei || "").toLowerCase() === norm ||
+      (m.primary || "").toLowerCase() === norm ||
+      (m.secondary || "").toLowerCase() === norm ||
+      (m.macId || "").toLowerCase() === norm ||
+      (m.sensorNo || "").toLowerCase() === norm
+    );
+  });
+}
+
+async function restoreStockByValue(value, vehicleNo) {
+  if (!stockItemsTableReady) return 0;
+  const matched = findStockByValue(value);
+  let count = 0;
+  for (const item of matched) {
+    try {
+      const newMeta = { ...(item.metadata || {}) };
+      delete newMeta.usedInVehicle;
+      delete newMeta.usedAt;
+      delete newMeta.usedInInstallation;
+      const newQty = item.quantity + 1;
+      await updateStockItem({ ...item, quantity: newQty, metadata: newMeta });
+      if (stockTxTableReady) {
+        try {
+          await insertStockTransaction({
+            stockItemId: item.id,
+            vehicleNo: vehicleNo || null,
+            delta: +1,
+            resultingQuantity: newQty,
+            note: `Returned from ${vehicleNo || "?"} — admin edit`,
+            createdBy: currentUser || "admin",
+            itemNameSnapshot: item.name + (item.category ? ` (${item.category})` : ""),
+          });
+        } catch {}
+      }
+      count++;
+    } catch (e) {
+      console.warn("Stock restore by value failed:", e);
+    }
+  }
+  return count;
+}
+
+async function consumeStockByValue(value, installationId, vehicleNo) {
+  if (!stockItemsTableReady) return 0;
+  const matched = findStockByValue(value);
+  let count = 0;
+  for (const item of matched) {
+    if (item.quantity <= 0) continue; // already out of stock
+    try {
+      const newMeta = {
+        ...(item.metadata || {}),
+        usedInVehicle: vehicleNo || null,
+        usedAt: new Date().toISOString(),
+        usedInInstallation: installationId || null,
+      };
+      const newQty = item.quantity - 1;
+      await updateStockItem({ ...item, quantity: newQty, metadata: newMeta });
+      if (stockTxTableReady) {
+        try {
+          await insertStockTransaction({
+            stockItemId: item.id,
+            installationId: installationId || null,
+            vehicleNo: vehicleNo || null,
+            delta: -1,
+            resultingQuantity: newQty,
+            note: `Used in ${vehicleNo || "?"} — admin edit`,
+            createdBy: currentUser || "admin",
+            itemNameSnapshot: item.name + (item.category ? ` (${item.category})` : ""),
+          });
+        } catch {}
+      }
+      count++;
+    } catch (e) {
+      console.warn("Stock consume by value failed:", e);
+    }
+  }
+  return count;
+}
+
 function openEditInstallation(id) {
   const inst = loadInstallations().find((i) => i.id === id);
   if (!inst) return;
 
+  // Extract current values from history arrays
+  const activeImeiEntry = (inst.imeiHistory || []).find((h) => h.active) || (inst.imeiHistory || [])[inst.imeiHistory?.length - 1];
+  const currentImei = activeImeiEntry?.value || "";
+  const activeSimEntry = (inst.simHistory || []).find((h) => h.active) || (inst.simHistory || [])[inst.simHistory?.length - 1];
+  const currentPrimary = activeSimEntry?.value || "";
+  const currentSecondary = inst.secondarySim || activeSimEntry?.secondaryValue || "";
+
   showModal(
     `
-    <h3>Edit Installation</h3>
-    <p class="modal-desc">Fix details for <strong>${escapeHtml(inst.vehicleNo)}</strong>. IMEI / primary SIM history are managed through repair work.</p>
+    <h3>Edit Installation — ${escapeHtml(inst.vehicleNo)}</h3>
+    <p class="modal-desc">Admin can edit any field. Changes update the active record; history is preserved.</p>
     <div class="edit-grid">
+      <div class="field"><label for="editImei">IMEI</label><input type="text" id="editImei" value="${escapeHtml(currentImei)}" inputmode="numeric" autocomplete="off" /></div>
+      <div class="field"><label for="editModel">GPS Model</label><input type="text" id="editModel" value="${escapeHtml(inst.gpsModel || "")}" autocomplete="off" /></div>
       <div class="field"><label for="editVehicle">Vehicle No</label><input type="text" id="editVehicle" value="${escapeHtml(inst.vehicleNo)}" autocomplete="off" /></div>
-      <div class="field"><label for="editModel">GPS Model</label><input type="text" id="editModel" value="${escapeHtml(inst.gpsModel)}" autocomplete="off" /></div>
-      <div class="field"><label for="editMac">MAC ID</label><input type="text" id="editMac" value="${escapeHtml(inst.macId)}" autocomplete="off" /></div>
-      <div class="field"><label for="editSensor">Sensor No</label><input type="text" id="editSensor" value="${escapeHtml(inst.sensorNo)}" autocomplete="off" /></div>
-      <div class="field full-width"><label for="editSecondarySim">Secondary No <span class="field-tag">admin only</span></label><input type="text" id="editSecondarySim" value="${escapeHtml(inst.secondarySim || "")}" placeholder="Optional backup / Secondary No" autocomplete="off" inputmode="numeric" /></div>
+      <div class="field"><label for="editSecondarySim">Secondary No (ICCID)</label><input type="text" id="editSecondarySim" value="${escapeHtml(currentSecondary)}" placeholder="e.g. 8991872050707450776" inputmode="numeric" autocomplete="off" /></div>
+      <div class="field"><label for="editPrimarySim">Primary No (Mobile)</label><input type="text" id="editPrimarySim" value="${escapeHtml(currentPrimary)}" placeholder="e.g. 5753201219905" inputmode="numeric" autocomplete="off" /></div>
+      <div class="field"><label for="editSensor">Sensor No</label><input type="text" id="editSensor" value="${escapeHtml(inst.sensorNo || "")}" autocomplete="off" /></div>
+      <div class="field"><label for="editMac">MAC ID</label><input type="text" id="editMac" value="${escapeHtml(inst.macId || "")}" autocomplete="off" /></div>
     </div>
+    <label class="stock-restore-toggle">
+      <input type="checkbox" id="editRestoreStock" />
+      <span class="stock-restore-text">
+        <strong>↻ Restore old + consume new stock</strong>
+        <small>If you change IMEI / Primary / Secondary, the old value goes back to stock (+1) and the new value gets consumed (−1) — only if those items exist in stock.</small>
+      </span>
+    </label>
     <div class="modal-actions">
       <button type="button" class="btn btn-secondary modal-close">Cancel</button>
       <button type="button" class="btn btn-primary modal-confirm">Save changes</button>
     </div>
     `,
     async () => {
+      const newImei = document.getElementById("editImei").value.trim();
       const vehicleNo = document.getElementById("editVehicle").value.trim();
       const gpsModel = document.getElementById("editModel").value.trim();
       const macId = document.getElementById("editMac").value.trim();
       const sensorNo = document.getElementById("editSensor").value.trim();
-      const secondarySim = document.getElementById("editSecondarySim").value.trim();
+      const newSecondary = document.getElementById("editSecondarySim").value.trim();
+      const newPrimary = document.getElementById("editPrimarySim").value.trim();
+      const restoreStock = document.getElementById("editRestoreStock").checked;
 
-      if (!vehicleNo || !gpsModel || !macId || !sensorNo) {
-        showToast("Vehicle, model, MAC and sensor are required.", true);
+      // Mandatory: vehicle + model only (other fields optional for flexibility)
+      if (!vehicleNo || !gpsModel) {
+        showToast("Vehicle and GPS Model are required.", true);
         return false;
       }
-      const clash = loadInstallations().some((i) => i.id !== inst.id && i.vehicleNo.toLowerCase() === vehicleNo.toLowerCase());
+      const clash = loadInstallations().some(
+        (i) => i.id !== inst.id && i.vehicleNo.toLowerCase() === vehicleNo.toLowerCase()
+      );
       if (clash) {
         showToast("Another installation already uses that vehicle number.", true);
         return false;
       }
 
-      const updated = { ...inst, vehicleNo, gpsModel, macId, sensorNo, secondarySim: secondarySim || null };
+      // Update IMEI history — replace active item's value, or append if changed
+      let newImeiHistory = [...(inst.imeiHistory || [])];
+      const imeiChanged = newImei !== currentImei;
+      if (imeiChanged) {
+        newImeiHistory = newImeiHistory.map((h) => ({ ...h, active: false }));
+        if (newImei) newImeiHistory.push({ value: newImei, addedAt: new Date().toISOString(), active: true });
+      } else if (newImeiHistory.length === 0 && newImei) {
+        newImeiHistory.push({ value: newImei, addedAt: new Date().toISOString(), active: true });
+      }
+
+      // Update SIM history — replace active item or push new
+      let newSimHistory = [...(inst.simHistory || [])];
+      const primaryChanged = newPrimary !== currentPrimary;
+      const secondaryChanged = newSecondary !== currentSecondary;
+      if (primaryChanged || secondaryChanged) {
+        newSimHistory = newSimHistory.map((h) => ({ ...h, active: false }));
+        if (newPrimary || newSecondary) {
+          newSimHistory.push({
+            value: newPrimary || newSecondary,
+            secondaryValue: newSecondary,
+            addedAt: new Date().toISOString(),
+            active: true,
+            pendingDeactivation: false,
+          });
+        }
+      }
+
+      const updated = {
+        ...inst,
+        vehicleNo,
+        gpsModel,
+        macId,
+        sensorNo,
+        secondarySim: newSecondary || null,
+        imeiHistory: newImeiHistory,
+        simHistory: newSimHistory,
+      };
+
       try {
         await updateInstallation(updated);
+
+        // Stock restore/consume if checkbox is on
+        let totalRestored = 0;
+        let totalConsumed = 0;
+        if (restoreStock) {
+          if (imeiChanged) {
+            if (currentImei) totalRestored += await restoreStockByValue(currentImei, inst.vehicleNo);
+            if (newImei) totalConsumed += await consumeStockByValue(newImei, inst.id, vehicleNo);
+          }
+          if (primaryChanged) {
+            if (currentPrimary) totalRestored += await restoreStockByValue(currentPrimary, inst.vehicleNo);
+            if (newPrimary) totalConsumed += await consumeStockByValue(newPrimary, inst.id, vehicleNo);
+          }
+          if (secondaryChanged) {
+            if (currentSecondary) totalRestored += await restoreStockByValue(currentSecondary, inst.vehicleNo);
+            if (newSecondary) totalConsumed += await consumeStockByValue(newSecondary, inst.id, vehicleNo);
+          }
+        }
+
         await refreshAllData();
-        showToast("Installation updated.");
+        if (restoreStock && (totalRestored || totalConsumed)) {
+          showToast(`✓ Updated. Restored ${totalRestored} · Consumed ${totalConsumed} stock items.`);
+        } else {
+          showToast("✓ Installation updated.");
+        }
         render();
         return true;
       } catch (err) {
