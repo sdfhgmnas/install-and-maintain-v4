@@ -9572,4 +9572,105 @@ button.clickable-card:focus-visible {
   color: #475569;
 }
  
-
+/* ============================================================
+   v3.5.7 — Autocomplete dropdown for IMEI / SIM (suffix match)
+   ============================================================ */
+.autocomplete-wrap {
+  position: relative;
+}
+ 
+.autocomplete-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  z-index: 100;
+  max-height: 320px;
+  overflow-y: auto;
+  display: none;
+}
+ 
+.autocomplete-dropdown.show {
+  display: block;
+  animation: ac-slide-in 0.12s ease-out;
+}
+ 
+@keyframes ac-slide-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+ 
+.autocomplete-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  cursor: pointer;
+  border-bottom: 1px solid #f1f5f9;
+  transition: background 0.1s;
+}
+ 
+.autocomplete-item:hover,
+.autocomplete-item:active {
+  background: #f0f9ff;
+}
+ 
+.autocomplete-item:last-child {
+  border-bottom: none;
+}
+ 
+.ac-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  flex: 1;
+}
+ 
+.ac-value {
+  font-size: 0.82rem;
+  color: #1e293b;
+  letter-spacing: 0.02em;
+  word-break: break-all;
+}
+ 
+.ac-value strong {
+  background: #fef08a;
+  color: #713f12;
+  padding: 0 0.15rem;
+  border-radius: 3px;
+  font-weight: 800;
+}
+ 
+.ac-name {
+  font-size: 0.72rem;
+  color: #64748b;
+  font-weight: 600;
+}
+ 
+.ac-meta {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: #0891b2;
+  font-weight: 700;
+  background: #ecfeff;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+ 
+@media (max-width: 480px) {
+  .ac-value {
+    font-size: 0.76rem;
+  }
+  .ac-meta {
+    font-size: 0.68rem;
+    padding: 0.18rem 0.4rem;
+  }
+}
+ 
