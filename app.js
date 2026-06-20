@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.6.0";
+const APP_VERSION = "3.6.2";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -5105,6 +5105,10 @@ function buildVehicleTimeline(inst) {
 
 /* ---------------- Page: Deletion audit log ---------------- */
 
+let deletionLogQuery = "";
+let deletionLogTypeFilter = "all";
+let deletionLogUserFilter = "all";
+
 function renderDeletionsPage() {
   const log = deletionLog;
 
@@ -5113,11 +5117,16 @@ function renderDeletionsPage() {
     installation: 0,
     maintenance: 0,
     stock_item: 0,
+    sim: 0,
+    category: 0,
+    supplier: 0,
     other: 0,
   };
+  const userCounts = {};
   for (const d of log) {
     if (counts[d.entityType] != null) counts[d.entityType] += 1;
     else counts.other += 1;
+    userCounts[d.deletedBy || "unknown"] = (userCounts[d.deletedBy || "unknown"] || 0) + 1;
   }
 
   const typeIcon = {
@@ -5137,25 +5146,73 @@ function renderDeletionsPage() {
     supplier: "Supplier",
   };
 
+  // Apply filters
+  let filtered = log;
+  if (deletionLogTypeFilter !== "all") {
+    filtered = filtered.filter((d) => d.entityType === deletionLogTypeFilter);
+  }
+  if (deletionLogUserFilter !== "all") {
+    filtered = filtered.filter((d) => d.deletedBy === deletionLogUserFilter);
+  }
+  if (deletionLogQuery) {
+    const q = deletionLogQuery.toLowerCase();
+    filtered = filtered.filter((d) => {
+      const hay = `${d.entityLabel || ""} ${d.reason || ""} ${d.deletedBy || ""} ${d.entityType || ""}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
   app.innerHTML = `
-    ${renderHeader("Deletion Audit Log", "Every delete action across the app, with reason")}
+    ${renderHeader("Deleted Logs", "Every delete action with reason + snapshot")}
     <main class="main">
       ${renderAdminNav("deletions")}
       <div class="summary-grid">
-        <div class="summary-box"><strong>${log.length}</strong><span>Total deletions</span></div>
+        <div class="summary-box summary-danger"><strong>${log.length}</strong><span>Total deleted</span></div>
         <div class="summary-box summary-warn"><strong>${counts.installation}</strong><span>Installations</span></div>
         <div class="summary-box summary-warn"><strong>${counts.maintenance}</strong><span>Repairs</span></div>
         <div class="summary-box"><strong>${counts.stock_item}</strong><span>Stock items</span></div>
+        <div class="summary-box"><strong>${counts.sim + counts.category + counts.supplier + counts.other}</strong><span>Others</span></div>
       </div>
       <section class="card">
         <div class="section-heading">
           <div>
-            <h2>All deletions (${log.length})</h2>
+            <h2>All deletions (${filtered.length} of ${log.length})</h2>
             <p class="section-subtitle">Newest first. This log is immutable — even if the row is deleted from its main table, the deletion record stays here for accountability.</p>
           </div>
           ${!deletionLogTableReady ? `<span class="badge badge-warn">deletion_log table missing — run migration</span>` : ""}
         </div>
-        <div class="table-wrap">
+
+        <input type="search" class="sticky-search" id="deletionSearch" placeholder="Search by vehicle, IMEI, reason, user..." value="${escapeHtml(deletionLogQuery)}" autocomplete="off" />
+
+        <div class="filter-row" style="margin-top: 0.7rem;">
+          <label class="filter-group">
+            <span class="filter-label">Type:</span>
+            <select id="deletionTypeFilter">
+              <option value="all" ${deletionLogTypeFilter === "all" ? "selected" : ""}>All types</option>
+              <option value="installation" ${deletionLogTypeFilter === "installation" ? "selected" : ""}>🆕 Installations (${counts.installation})</option>
+              <option value="maintenance" ${deletionLogTypeFilter === "maintenance" ? "selected" : ""}>🔧 Repairs (${counts.maintenance})</option>
+              <option value="stock_item" ${deletionLogTypeFilter === "stock_item" ? "selected" : ""}>📦 Stock (${counts.stock_item})</option>
+              <option value="sim" ${deletionLogTypeFilter === "sim" ? "selected" : ""}>📶 SIM (${counts.sim})</option>
+              <option value="category" ${deletionLogTypeFilter === "category" ? "selected" : ""}>🏷️ Category (${counts.category})</option>
+              <option value="supplier" ${deletionLogTypeFilter === "supplier" ? "selected" : ""}>🏪 Supplier (${counts.supplier})</option>
+            </select>
+          </label>
+          <label class="filter-group">
+            <span class="filter-label">By:</span>
+            <select id="deletionUserFilter">
+              <option value="all" ${deletionLogUserFilter === "all" ? "selected" : ""}>All users</option>
+              ${Object.keys(userCounts).map((u) => `
+                <option value="${escapeHtml(u)}" ${deletionLogUserFilter === u ? "selected" : ""}>${escapeHtml(u)} (${userCounts[u]})</option>
+              `).join("")}
+            </select>
+          </label>
+          ${(deletionLogTypeFilter !== "all" || deletionLogUserFilter !== "all" || deletionLogQuery) ? `
+            <button type="button" class="btn btn-secondary btn-sm" id="clearDeletionFilters">✕ Clear</button>
+          ` : ""}
+        </div>
+
+        <!-- Desktop table -->
+        <div class="table-wrap deletion-table-desktop">
           <table>
             <thead>
               <tr>
@@ -5164,11 +5221,12 @@ function renderDeletionsPage() {
                 <th>What was deleted</th>
                 <th>Reason</th>
                 <th>By</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
-              ${log.length
-                ? log
+              ${filtered.length
+                ? filtered
                     .map(
                       (d) => `
                         <tr>
@@ -5181,18 +5239,123 @@ function renderDeletionsPage() {
                           <td class="mono">${escapeHtml(d.entityLabel || d.entityId || "—")}</td>
                           <td><span class="reason-text">${escapeHtml(d.reason || "—")}</span></td>
                           <td>${escapeHtml(d.deletedBy || "—")}</td>
+                          <td>
+                            <button type="button" class="btn btn-outline btn-sm view-snapshot-btn" data-deletion-id="${escapeHtml(d.id)}">👁 Snapshot</button>
+                          </td>
                         </tr>`
                     )
                     .join("")
-                : `<tr class="empty-row"><td colspan="5">No deletions recorded yet.</td></tr>`}
+                : `<tr class="empty-row"><td colspan="6">No deletions match your filters.</td></tr>`}
             </tbody>
           </table>
+        </div>
+
+        <!-- Mobile cards -->
+        <div class="deletion-card-grid">
+          ${filtered.length
+            ? filtered.map((d) => `
+              <article class="tk-card deletion-card">
+                <div class="tk-card-head">
+                  <span class="tk-pill tk-pill-deleted">${typeIcon[d.entityType] || "🗑️"} ${escapeHtml(typeLabel[d.entityType] || d.entityType)}</span>
+                  <span class="tk-chip tk-chip-deleted">🗑 by ${escapeHtml(d.deletedBy || "?")}</span>
+                </div>
+                <div class="deletion-card-body">
+                  <div class="del-row">
+                    <span class="del-label">What:</span>
+                    <span class="del-value mono">${escapeHtml(d.entityLabel || d.entityId || "—")}</span>
+                  </div>
+                  <div class="del-row">
+                    <span class="del-label">Reason:</span>
+                    <span class="del-value">${escapeHtml(d.reason || "—")}</span>
+                  </div>
+                  <div class="del-row">
+                    <span class="del-label">When:</span>
+                    <span class="del-value">${escapeHtml(formatDateTime(d.deletedAt))}</span>
+                  </div>
+                </div>
+                <div class="tk-actions">
+                  <button type="button" class="btn btn-outline btn-sm view-snapshot-btn" data-deletion-id="${escapeHtml(d.id)}">👁 View Snapshot</button>
+                </div>
+              </article>
+            `).join("")
+            : `<div class="entry-empty">
+                <div class="entry-empty-icon">🗑️</div>
+                <h3>No deletions found</h3>
+                <p>${log.length === 0 ? "Nothing has been deleted yet." : "Try adjusting your filters."}</p>
+              </div>`
+          }
         </div>
       </section>
     </main>
   `;
   bindAdminNav();
   bindLogout();
+
+  document.getElementById("deletionSearch")?.addEventListener("input", (e) => {
+    deletionLogQuery = e.target.value;
+    render();
+  });
+  document.getElementById("deletionTypeFilter")?.addEventListener("change", (e) => {
+    deletionLogTypeFilter = e.target.value;
+    render();
+  });
+  document.getElementById("deletionUserFilter")?.addEventListener("change", (e) => {
+    deletionLogUserFilter = e.target.value;
+    render();
+  });
+  document.getElementById("clearDeletionFilters")?.addEventListener("click", () => {
+    deletionLogQuery = "";
+    deletionLogTypeFilter = "all";
+    deletionLogUserFilter = "all";
+    render();
+  });
+  app.querySelectorAll(".view-snapshot-btn").forEach((btn) => {
+    btn.addEventListener("click", () => openSnapshotModal(btn.dataset.deletionId));
+  });
+}
+
+function openSnapshotModal(deletionId) {
+  const d = deletionLog.find((x) => x.id === deletionId);
+  if (!d) return;
+  const snap = d.snapshot || {};
+  const typeLabel = {
+    installation: "Installation",
+    maintenance: "Repair",
+    stock_item: "Stock Item",
+    sim: "SIM",
+    category: "Category",
+    supplier: "Supplier",
+  };
+  modal.innerHTML = `
+    <h3>📸 Snapshot — ${escapeHtml(typeLabel[d.entityType] || d.entityType)}</h3>
+    <p class="modal-desc">Full data of what was deleted. This is from the audit log — the actual row no longer exists in the database.</p>
+
+    <div class="snapshot-meta-grid">
+      <div class="snap-meta"><span>What:</span><strong>${escapeHtml(d.entityLabel || d.entityId)}</strong></div>
+      <div class="snap-meta"><span>Deleted by:</span><strong>${escapeHtml(d.deletedBy || "?")}</strong></div>
+      <div class="snap-meta"><span>When:</span><strong>${escapeHtml(formatDateTime(d.deletedAt))}</strong></div>
+      <div class="snap-meta"><span>Reason:</span><strong>${escapeHtml(d.reason || "—")}</strong></div>
+    </div>
+
+    <h4 style="margin-top: 1rem; margin-bottom: 0.4rem;">Snapshot data:</h4>
+    <pre class="snapshot-json">${escapeHtml(JSON.stringify(snap, null, 2))}</pre>
+
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Close</button>
+      <button type="button" class="btn btn-outline" id="copySnapshot">⎘ Copy JSON</button>
+    </div>
+  `;
+  modalOverlay.classList.remove("hidden");
+  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+  document.getElementById("copySnapshot")?.addEventListener("click", () => {
+    const text = JSON.stringify(snap, null, 2);
+    try {
+      navigator.clipboard.writeText(text);
+      showToast("✓ JSON copied to clipboard");
+    } catch {
+      showToast("Copy failed", true);
+    }
+  });
 }
 
 function openVehicleTimelineModal(installationId) {
