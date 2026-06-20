@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.6.3";
+const APP_VERSION = "3.6.5";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -2433,6 +2433,75 @@ function formatDateTime(iso) {
   });
 }
 
+/**
+ * Wraps an async action so that a click handler:
+ *  - Disables the button while the action runs
+ *  - Shows a spinner + custom busy label
+ *  - Ignores extra clicks (prevents duplicate submits)
+ *  - Restores button state on success or error
+ *
+ * Usage:
+ *   button.addEventListener("click", withBusyButton(async () => {
+ *     await saveStuff();
+ *   }, { busyText: "Saving…" }));
+ *
+ *  OR (called from inside a click handler):
+ *   await runWithBusyButton(button, async () => { await doStuff(); }, "Saving…");
+ */
+/**
+ * Global top-of-page loading bar for long async ops.
+ * Reference-counted so nested ops work correctly.
+ */
+let _busyCount = 0;
+function showGlobalBusy() {
+  _busyCount++;
+  if (_busyCount === 1) {
+    let bar = document.getElementById("globalBusyBar");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "globalBusyBar";
+      bar.className = "global-busy-bar";
+      document.body.appendChild(bar);
+    }
+    bar.classList.add("show");
+  }
+}
+function hideGlobalBusy() {
+  _busyCount = Math.max(0, _busyCount - 1);
+  if (_busyCount === 0) {
+    const bar = document.getElementById("globalBusyBar");
+    if (bar) bar.classList.remove("show");
+  }
+}
+
+async function runWithBusyButton(btn, fn, busyText = "Saving…") {
+  if (!btn || btn.dataset.busy === "1") return; // already busy → ignore
+  btn.dataset.busy = "1";
+  const originalLabel = btn.innerHTML;
+  const originalDisabled = btn.disabled;
+  btn.disabled = true;
+  btn.classList.add("is-busy");
+  btn.innerHTML = `<span class="btn-spinner"></span> <span class="btn-busy-text">${escapeHtml(busyText)}</span>`;
+  showGlobalBusy();
+  try {
+    await fn();
+  } finally {
+    hideGlobalBusy();
+    btn.disabled = originalDisabled;
+    btn.classList.remove("is-busy");
+    btn.innerHTML = originalLabel;
+    delete btn.dataset.busy;
+  }
+}
+
+function withBusyButton(fn, { busyText = "Saving…" } = {}) {
+  return async function(e) {
+    const btn = e?.currentTarget || e?.target;
+    if (!btn) { await fn.call(this, e); return; }
+    await runWithBusyButton(btn, () => fn.call(this, e), busyText);
+  };
+}
+
 function showToast(message, isError = false) {
   toast.textContent = message;
   toast.classList.toggle("error", isError);
@@ -2458,14 +2527,20 @@ function showModal(html, onConfirm) {
     if (e.target === modalOverlay) closeModal();
   };
 
-  modal.querySelector(".modal-confirm")?.addEventListener("click", async () => {
-    try {
-      const result = await onConfirm?.();
-      if (result !== false) closeModal();
-    } catch (err) {
-      showToast(err.message || "Something went wrong.", true);
-    }
-  });
+  const confirmBtn = modal.querySelector(".modal-confirm");
+  if (confirmBtn) {
+    confirmBtn.addEventListener("click", async () => {
+      if (confirmBtn.dataset.busy === "1") return; // double-click guard
+      await runWithBusyButton(confirmBtn, async () => {
+        try {
+          const result = await onConfirm?.();
+          if (result !== false) closeModal();
+        } catch (err) {
+          showToast(err.message || "Something went wrong.", true);
+        }
+      }, "Saving…");
+    });
+  }
 
   return { modalEl: modal, close: closeModal };
 }
@@ -3580,9 +3655,14 @@ function renderInstallForm() {
   });
   applyGpsType("FMB"); // default
 
-  document.getElementById("installForm")?.addEventListener("submit", (e) => {
+  document.getElementById("installForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    handleInstallSubmit(_gpsType);
+    const submitBtn = e.target.querySelector('button[type="submit"]') || document.getElementById("submitInstall");
+    if (!submitBtn) { handleInstallSubmit(_gpsType); return; }
+    if (submitBtn.dataset.busy === "1") return; // double-click guard
+    await runWithBusyButton(submitBtn, async () => {
+      await handleInstallSubmit(_gpsType);
+    }, "Saving installation…");
   });
 
   // Barcode scan handlers — fill IMEI/SIM by scanning the device/card.
@@ -3885,15 +3965,10 @@ function handleInstallSubmit(gpsType = "FMB") {
   showModal(
     `
     <h3>Confirm Before Submit</h3>
-    <p class="modal-desc">${isNormal ? "Confirm vehicle is live before submitting." : "Both answers must be <strong>Yes</strong> to submit."}</p>
+    <p class="modal-desc">${isNormal
+      ? "Sab details check kar lo, fir Submit karo. Vehicle live hai ya nahi — admin baad me set karenge."
+      : "MAC ID confirm karke Submit karo."}</p>
     <div class="confirm-questions">
-      <div class="confirm-q">
-        <span>Vehicle live hai?</span>
-        <div class="yes-no-group">
-          <label class="yn-option"><input type="radio" name="vehicleLive" value="yes" /><span>Yes</span></label>
-          <label class="yn-option"><input type="radio" name="vehicleLive" value="no" /><span>No</span></label>
-        </div>
-      </div>
       ${macQuestion}
     </div>
     <div class="modal-actions">
@@ -3902,11 +3977,12 @@ function handleInstallSubmit(gpsType = "FMB") {
     </div>
     `,
     async () => {
-      const vehicleLive = modal.querySelector('input[name="vehicleLive"]:checked')?.value;
+      // Vehicle live status is now admin's responsibility (set via 🟢/🔴 button
+      // on the Installations page). We no longer ask Akash about it.
       const macEntered = isNormal ? "yes" : modal.querySelector('input[name="macEntered"]:checked')?.value;
 
-      if (vehicleLive !== "yes" || macEntered !== "yes") {
-        showToast("Both answers must be Yes to submit.", true);
+      if (!isNormal && macEntered !== "yes") {
+        showToast("MAC ID confirm karna zaroori hai.", true);
         return false;
       }
 
@@ -4195,23 +4271,26 @@ function renderRepairForm() {
 
   document.getElementById("repairForm").addEventListener("submit", async (e) => {
     e.preventDefault();
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    if (submitBtn && submitBtn.dataset.busy === "1") return; // double-click guard
 
-    const imei = imeiInput.value.trim();
-    const inst = findInstallationByImei(imei) || findInstallationByVehicle(vehicleInput.value);
-    const wiring = document.getElementById("workWiring").checked;
-    const simChange = simCheck.checked;
-    const deviceChange = deviceCheck.checked;
-    const sensorOutForRepair = document.getElementById("workSensorOut").checked;
-    const sensorChanged = document.getElementById("workSensorChanged").checked;
-    const deviceOutForRepair = document.getElementById("workDeviceOut").checked;
-    const otherWork = otherCheck.checked;
-    const newSim = document.getElementById("newSimNo").value.trim();
-    const newImei = document.getElementById("newImeiNo").value.trim();
-    const otherWorkText = document.getElementById("otherWorkText").value.trim();
+    const _doRepairSubmit = async () => {
+      const imei = imeiInput.value.trim();
+      const inst = findInstallationByImei(imei) || findInstallationByVehicle(vehicleInput.value);
+      const wiring = document.getElementById("workWiring").checked;
+      const simChange = simCheck.checked;
+      const deviceChange = deviceCheck.checked;
+      const sensorOutForRepair = document.getElementById("workSensorOut").checked;
+      const sensorChanged = document.getElementById("workSensorChanged").checked;
+      const deviceOutForRepair = document.getElementById("workDeviceOut").checked;
+      const otherWork = otherCheck.checked;
+      const newSim = document.getElementById("newSimNo").value.trim();
+      const newImei = document.getElementById("newImeiNo").value.trim();
+      const otherWorkText = document.getElementById("otherWorkText").value.trim();
 
-    if (!inst) {
-      imeiInput.classList.add("invalid");
-      vehicleInput.classList.add("invalid");
+      if (!inst) {
+        imeiInput.classList.add("invalid");
+        vehicleInput.classList.add("invalid");
       showToast("IMEI or vehicle not found in installation database.", true);
       return;
     }
@@ -4346,6 +4425,12 @@ function renderRepairForm() {
       setView("akash-home");
     } catch (err) {
       showToast(err.message || "Failed to save repair work.", true);
+    }
+    }; // end _doRepairSubmit
+    if (submitBtn) {
+      await runWithBusyButton(submitBtn, _doRepairSubmit, "Saving repair…");
+    } else {
+      await _doRepairSubmit();
     }
   });
 }
