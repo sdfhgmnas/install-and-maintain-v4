@@ -1,7 +1,7 @@
 // Service worker — app shell caching with network-first for HTML so updates
 // arrive quickly, and stale-while-revalidate for JS/CSS so the app loads
 // fast offline. Backend API calls are never cached (always live).
-const VERSION = "v3.6.0";
+const VERSION = "v3.6.2";
 const SHELL = `gps-tracker-shell-${VERSION}`;
  
 const SHELL_FILES = [
