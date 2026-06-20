@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.6.2";
+const APP_VERSION = "3.6.3";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -1659,7 +1659,7 @@ async function prewarmCamera() {
   }
 }
 
-async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Point camera at the barcode or QR code.", onScan, codeType = "any", checkDuplicates = false }) {
+async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Point camera at the barcode or QR code.", onScan, codeType = "any", checkDuplicates = false, dupCheckScope = "all" }) {
   // Use the SAME proven native BarcodeDetector setup as the bulk scanner
   // (Abhinav's workflow). Now includes ALL Abhinav features:
   // - Format restriction (5 critical), larger viewfinder
@@ -1776,9 +1776,15 @@ async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Po
       return;
     }
 
-    // Duplicate check (optional)
+    // Duplicate check (optional, with scope)
     if (checkDuplicates && typeof findExistingCode === "function") {
-      const existing = findExistingCode(value);
+      // dupCheckScope:
+      //   "all"     → check stock + installs (Abhinav stock add)
+      //   "install" → only check active installs, skip stock (Akash installing FROM stock)
+      const findOptions = dupCheckScope === "install"
+        ? { skipStock: true, skipInstallHistory: true }
+        : {};
+      const existing = findExistingCode(value, findOptions);
       if (existing) {
         lastRejectedCode = value;
         lastRejectedTime = now;
@@ -1799,6 +1805,15 @@ async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Po
         setStatus(`✓ Detected IMEI — saving`);
       } else {
         setStatus(`✓ Scanned — saving`);
+      }
+    }
+
+    // Informational check — if scanned value is in stock, show that as a positive hint
+    // (only when stock dups are NOT being treated as duplicates)
+    if (dupCheckScope === "install" && typeof findStockByValue === "function") {
+      const stockMatched = findStockByValue(value);
+      if (stockMatched.length > 0) {
+        setStatus(`✓ Found in Stock: ${stockMatched[0].name} — will auto-link on save`);
       }
     }
 
@@ -3577,11 +3592,12 @@ function renderInstallForm() {
       hint: "GPS device pe printed barcode ya QR code pe camera point karo.",
       codeType: "imei",
       checkDuplicates: true,
+      dupCheckScope: "install", // Akash installing — stock match is EXPECTED, not duplicate
       onScan: (val) => {
         const cleaned = val.replace(/\D/g, "") || val.trim();
         const imeiInput = document.getElementById("instImei");
         imeiInput.value = cleaned;
-        imeiInput.dispatchEvent(new Event("input")); // trigger lookup
+        imeiInput.dispatchEvent(new Event("input"));
         showToast(`IMEI scanned: ${cleaned}`);
       },
     });
@@ -3592,6 +3608,7 @@ function renderInstallForm() {
       hint: "SIM card pe printed long number ya barcode pe camera point karo.",
       codeType: "iccid",
       checkDuplicates: true,
+      dupCheckScope: "install", // Akash installing — stock match is EXPECTED
       onScan: (val) => {
         const cleaned = val.replace(/\D/g, "") || val.trim();
         const input = document.getElementById("instSim");
@@ -8357,22 +8374,30 @@ function rankItemSuggestions(query, excludeId = null) {
 /**
  * Searches across stockItems, installations, and sims table for any record
  * containing the given code (IMEI / ICCID / mobile). Returns first match.
- * Used by the bulk scanner to prevent duplicate entries.
+ *
+ * Options:
+ *   - skipStock: true  → don't count stock matches as duplicates
+ *                        (use this for install scans — Akash IS taking from stock)
+ *   - skipInstallHistory: true  → don't count old history IMEI/SIMs as duplicates
  */
-function findExistingCode(value) {
+function findExistingCode(value, options = {}) {
   const norm = String(value || "").trim();
   if (!norm) return null;
+  const skipStock = !!options.skipStock;
+  const skipHistory = !!options.skipInstallHistory;
 
-  // 1) Stock items — check metadata.imei, metadata.secondary, metadata.primary, metadata.macId
-  for (const item of stockItems) {
-    const m = item.metadata || {};
-    if (m.imei === norm || m.secondary === norm || m.primary === norm || m.macId === norm) {
-      const where = m.imei === norm ? "IMEI" : m.secondary === norm ? "Secondary" : m.primary === norm ? "Primary" : "MAC";
-      return {
-        source: "stock",
-        label: `Already in Stock as ${item.name} (${where})`,
-        item,
-      };
+  // 1) Stock items — only if not skipped
+  if (!skipStock) {
+    for (const item of stockItems) {
+      const m = item.metadata || {};
+      if (m.imei === norm || m.secondary === norm || m.primary === norm || m.macId === norm) {
+        const where = m.imei === norm ? "IMEI" : m.secondary === norm ? "Secondary" : m.primary === norm ? "Primary" : "MAC";
+        return {
+          source: "stock",
+          label: `Already in Stock as ${item.name} (${where})`,
+          item,
+        };
+      }
     }
   }
 
@@ -8402,24 +8427,26 @@ function findExistingCode(value) {
         install: inst,
       };
     }
-    // Also check history
-    if ((inst.imeiHistory || []).includes(norm)) {
-      return {
-        source: "install_history",
-        label: `Previously used in ${inst.vehicleNo} (old IMEI)`,
-        install: inst,
-      };
-    }
-    if ((inst.simHistory || []).includes(norm)) {
-      return {
-        source: "install_history",
-        label: `Previously used in ${inst.vehicleNo} (old SIM)`,
-        install: inst,
-      };
+    // Old history — soft signal, can be skipped
+    if (!skipHistory) {
+      if ((inst.imeiHistory || []).some((h) => h.value === norm)) {
+        return {
+          source: "install_history",
+          label: `Previously used in ${inst.vehicleNo} (old IMEI)`,
+          install: inst,
+        };
+      }
+      if ((inst.simHistory || []).some((h) => h.value === norm || h.secondaryValue === norm)) {
+        return {
+          source: "install_history",
+          label: `Previously used in ${inst.vehicleNo} (old SIM)`,
+          install: inst,
+        };
+      }
     }
   }
 
-  // 3) Manual SIM DB
+  // 3) Manual SIM DB — informational, not a hard duplicate
   for (const sim of sims) {
     if (sim.primaryNumber === norm || sim.secondaryNumber === norm) {
       const where = sim.primaryNumber === norm ? "Primary" : "Secondary";
