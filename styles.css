@@ -9868,3 +9868,66 @@ button.clickable-card:focus-visible {
   font-size: 0.82rem;
 }
  
+/* ============================================================
+   v3.6.4 — Universal button busy state (prevent double-submit)
+   ============================================================ */
+ 
+.btn.is-busy {
+  position: relative;
+  cursor: progress !important;
+  opacity: 0.85;
+  pointer-events: none;
+}
+ 
+.btn.is-busy .btn-spinner,
+.btn .btn-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: btn-spin 0.7s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+ 
+.btn-busy-text {
+  vertical-align: middle;
+}
+ 
+@keyframes btn-spin {
+  to { transform: rotate(360deg); }
+}
+ 
+/* Disabled buttons that aren't busy still look standard-disabled */
+.btn[disabled]:not(.is-busy) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+ 
+/* Optional global top-loading bar (used by long async ops) */
+.global-busy-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg,
+    transparent 0%, #0891b2 30%, #06b6d4 50%, #0891b2 70%, transparent 100%);
+  background-size: 200% 100%;
+  animation: bar-slide 1.2s linear infinite;
+  z-index: 99999;
+  pointer-events: none;
+  display: none;
+}
+ 
+.global-busy-bar.show {
+  display: block;
+}
+ 
+@keyframes bar-slide {
+  from { background-position: -100% 0; }
+  to   { background-position:  100% 0; }
+}
+ 
