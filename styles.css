@@ -9674,3 +9674,63 @@ button.clickable-card:focus-visible {
   }
 }
  
+/* ============================================================
+   v3.6.0 — Akash scanner upgrade: larger viewfinder + focus ring
+   ============================================================ */
+ 
+/* Larger viewfinder for single-scan modal (Akash) */
+.single-scan-large {
+  min-height: 320px !important;
+  aspect-ratio: 4 / 3;
+  max-height: 60vh;
+}
+ 
+/* Tap-to-focus yellow ring */
+.qr-focus-ring {
+  position: absolute;
+  width: 70px;
+  height: 70px;
+  border: 3px solid #facc15;
+  border-radius: 50%;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(2);
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.25s ease;
+  box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.25), 0 0 20px rgba(250, 204, 21, 0.4);
+  z-index: 5;
+}
+ 
+.qr-focus-ring.show {
+  animation: focus-ring-pulse 0.7s ease-out forwards;
+}
+ 
+@keyframes focus-ring-pulse {
+  0% {
+    transform: translate(-50%, -50%) scale(2);
+    opacity: 0;
+  }
+  20% {
+    transform: translate(-50%, -50%) scale(1.3);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(0.9);
+    opacity: 0;
+  }
+}
+ 
+/* Make viewfinder clickable */
+.bulk-scan-viewfinder {
+  cursor: crosshair;
+}
+ 
+@media (max-width: 540px) {
+  .single-scan-large {
+    min-height: 280px !important;
+  }
+  .qr-focus-ring {
+    width: 55px;
+    height: 55px;
+  }
+}
+ 
