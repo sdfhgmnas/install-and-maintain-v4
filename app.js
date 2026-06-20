@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.5.8";
+const APP_VERSION = "3.6.0";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -1305,6 +1305,16 @@ function isLikelyPrimary(s) {
 }
 
 /**
+ * IMEI: 14-17 digits, NOT starting with 89 (which would be ICCID).
+ * Standard IMEI is 15 digits; some bulk barcodes have 16 (extra check digit).
+ */
+function isLikelyImei(s) {
+  const d = digitsOnly(s);
+  if (d.startsWith("89")) return false;
+  return d.length >= 14 && d.length <= 17;
+}
+
+/**
  * Definitively starts with "89" → must be ICCID/secondary
  */
 function startsLikeIccid(s) {
@@ -1625,25 +1635,72 @@ function horizontalBarChart(items, opts = {}) {
 
 let _activeScanner = null;
 
-async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Point camera at the barcode or QR code.", onScan }) {
+/**
+ * Pre-warm camera on Akash login — silently requests permission +
+ * starts a tiny hidden stream briefly so first scan opens instantly
+ * (vs 1-2s cold start). Closes stream immediately after.
+ */
+let _cameraPrewarmed = false;
+async function prewarmCamera() {
+  if (_cameraPrewarmed) return;
+  if (!navigator.mediaDevices?.getUserMedia) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false,
+    });
+    // Immediately stop — purpose was to warm camera + grant permission
+    setTimeout(() => {
+      try { stream.getTracks().forEach((t) => t.stop()); } catch {}
+    }, 300);
+    _cameraPrewarmed = true;
+  } catch (e) {
+    // Permission denied or no camera — silent fail, user will see normal prompt next time
+  }
+}
+
+async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Point camera at the barcode or QR code.", onScan, codeType = "any", checkDuplicates = false }) {
   // Use the SAME proven native BarcodeDetector setup as the bulk scanner
-  // (Abhinav's workflow). Falls back to html5-qrcode if BarcodeDetector
-  // is unavailable. Stops after first successful detection.
+  // (Abhinav's workflow). Now includes ALL Abhinav features:
+  // - Format restriction (5 critical), larger viewfinder
+  // - Smart code-type filter (IMEI/ICCID/Any) with visual rejection
+  // - Tap-to-focus with yellow ring
+  // - Success flash + green beep, fail flash + red buzz, vibration patterns
+  // - Duplicate detection (optional)
+  // - 89/57 prefix detection
   const hasNativeDetector =
     typeof window.BarcodeDetector !== "undefined" &&
     window.isSecureContext;
 
+  const typeLabels = {
+    imei:  { label: "IMEI",   desc: "14-17 digit device serial",   icon: "📡" },
+    iccid: { label: "SIM NO", desc: "89… 18-22 digit ICCID",       icon: "📶" },
+    any:   { label: "Any",    desc: "any code type",               icon: "🌀" },
+  };
+  let activeType = codeType;
+  const initialInfo = typeLabels[activeType] || typeLabels.any;
+
   modal.innerHTML = `
     <h3>${escapeHtml(title)}</h3>
-    <p class="modal-desc">${escapeHtml(hint)}</p>
+    <p class="modal-desc">
+      Looking for: <strong id="singleScanBadge">${initialInfo.icon} ${escapeHtml(initialInfo.label)}</strong>
+      <span style="color:#94a3b8;">(${escapeHtml(initialInfo.desc)})</span>
+    </p>
 
-    <div class="qr-reader-wrap bulk-scan-viewfinder">
+    <div class="seg-control" id="singleScanModeSwitcher" style="margin-bottom: 0.7rem;">
+      <button type="button" class="seg-btn ${activeType === 'any' ? 'active' : ''}" data-type="any">🌀 Any</button>
+      <button type="button" class="seg-btn ${activeType === 'imei' ? 'active' : ''}" data-type="imei">📡 IMEI</button>
+      <button type="button" class="seg-btn ${activeType === 'iccid' ? 'active' : ''}" data-type="iccid">📶 SIM NO</button>
+    </div>
+
+    <div class="qr-reader-wrap bulk-scan-viewfinder single-scan-large">
       <video id="singleScanVideo" autoplay playsinline muted></video>
       <div class="qr-scan-line"></div>
+      <div class="qr-focus-ring" id="singleFocusRing"></div>
       <div class="qr-controls">
         <button type="button" class="qr-icon-btn" id="singleTorchBtn" style="display:none;" aria-label="Torch">🔦</button>
       </div>
-      <div class="qr-status" id="qrStatus">Initialising camera…</div>
+      <div class="qr-status" id="qrStatus">${escapeHtml(hint)}</div>
     </div>
 
     <div class="manual-entry-block" style="margin-top: 0.7rem;">
@@ -1663,6 +1720,8 @@ async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Po
 
   let scanActive = true;
   let currentStream = null;
+  let lastRejectedCode = "";
+  let lastRejectedTime = 0;
 
   const setStatus = (t) => {
     const s = document.getElementById("qrStatus");
@@ -1678,17 +1737,83 @@ async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Po
     closeModal();
   };
 
+  // ===== Code-type validation =====
+  const validateType = (value) => {
+    if (activeType === "any") return { ok: true, value };
+    if (activeType === "imei") {
+      if (isLikelyImei(value)) return { ok: true, value };
+      // Special: starts with 89 → user scanned SIM but in IMEI mode
+      if (isLikelyIccid(value)) return { ok: false, reason: "✗ This is an ICCID (SIM no), not IMEI" };
+      return { ok: false, reason: "✗ Not an IMEI (must be 14-17 digits)" };
+    }
+    if (activeType === "iccid") {
+      if (isLikelyIccid(value)) return { ok: true, value };
+      if (isLikelyImei(value)) return { ok: false, reason: "✗ This is an IMEI, not SIM ICCID" };
+      return { ok: false, reason: "✗ Not a SIM ICCID (must start with 89, 18-22 digits)" };
+    }
+    return { ok: true, value };
+  };
+
   const handleScan = (raw) => {
     if (!scanActive) return;
     const value = String(raw || "").trim();
     if (!value) return;
+    const now = Date.now();
+
+    // Same code rejected within 2s → silently ignore
+    if (value === lastRejectedCode && now - lastRejectedTime < 2000) return;
+
+    // Type validation
+    const validation = validateType(value);
+    if (!validation.ok) {
+      lastRejectedCode = value;
+      lastRejectedTime = now;
+      try { playBeep(220, 0.18); } catch {}
+      try { navigator.vibrate && navigator.vibrate([60, 50, 60]); } catch {}
+      const tail = value.length > 8 ? "…" + value.slice(-6) : value;
+      setStatus(`${validation.reason} (${tail})`);
+      flashScanReject();
+      return;
+    }
+
+    // Duplicate check (optional)
+    if (checkDuplicates && typeof findExistingCode === "function") {
+      const existing = findExistingCode(value);
+      if (existing) {
+        lastRejectedCode = value;
+        lastRejectedTime = now;
+        try { playBeep(220, 0.25); } catch {}
+        try { navigator.vibrate && navigator.vibrate([80, 60, 80, 60, 80]); } catch {}
+        const tail = value.length > 12 ? value.slice(0, 6) + "…" + value.slice(-6) : value;
+        setStatus(`❌ Duplicate! "${tail}" — ${existing.label}`);
+        flashScanReject();
+        return;
+      }
+    }
+
+    // 89/57 prefix info (non-blocking, just informative)
+    if (activeType === "any") {
+      if (isLikelyIccid(value)) {
+        setStatus(`✓ Detected ICCID (89...) — saving`);
+      } else if (isLikelyImei(value)) {
+        setStatus(`✓ Detected IMEI — saving`);
+      } else {
+        setStatus(`✓ Scanned — saving`);
+      }
+    }
+
+    // SUCCESS
     scanActive = false;
-    try { playBeep(880, 0.08); } catch {}
+    try { playBeep(880, 0.08); setTimeout(() => playBeep(1100, 0.06), 70); } catch {}
     try { navigator.vibrate && navigator.vibrate(60); } catch {}
-    cleanup();
-    try { onScan(value); } catch (e) { console.error("onScan handler failed:", e); }
+    flashScanSuccess();
+    setTimeout(() => {
+      cleanup();
+      try { onScan(value); } catch (e) { console.error("onScan handler failed:", e); }
+    }, 200);
   };
 
+  // ===== Cancel + manual entry wiring =====
   modal.querySelector('[data-act="cancel"]').onclick = cleanup;
   modalOverlay.onclick = (e) => { if (e.target === modalOverlay) cleanup(); };
 
@@ -1705,6 +1830,21 @@ async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Po
     }
   });
 
+  // ===== Code-type switcher =====
+  modal.querySelectorAll("#singleScanModeSwitcher .seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      activeType = btn.dataset.type;
+      modal.querySelectorAll("#singleScanModeSwitcher .seg-btn").forEach((b) => {
+        b.classList.toggle("active", b.dataset.type === activeType);
+      });
+      const info = typeLabels[activeType];
+      const badge = document.getElementById("singleScanBadge");
+      if (badge) badge.textContent = `${info.icon} ${info.label}`;
+      setStatus(`Mode: ${info.icon} ${info.label} — ${info.desc}`);
+      lastRejectedCode = ""; // reset reject memory
+    });
+  });
+
   if (hasNativeDetector) {
     await initNativeSingleScanner(handleScan, setStatus, (s) => { currentStream = s; }, () => scanActive);
   } else {
@@ -1715,8 +1855,13 @@ async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Po
 /* Native BarcodeDetector single-shot — uses same proven path as bulk scanner */
 async function initNativeSingleScanner(onDetect, setStatus, captureStream, isActive) {
   try {
+    // Format restriction — 5 critical formats only (faster detection)
+    const desiredFormats = ["code_128", "code_39", "ean_13", "qr_code", "data_matrix"];
     let formats = [];
-    try { formats = await window.BarcodeDetector.getSupportedFormats(); } catch {}
+    try {
+      const supported = await window.BarcodeDetector.getSupportedFormats();
+      formats = desiredFormats.filter((f) => supported.includes(f));
+    } catch {}
     const detector = formats.length
       ? new window.BarcodeDetector({ formats })
       : new window.BarcodeDetector();
@@ -1765,9 +1910,37 @@ async function initNativeSingleScanner(onDetect, setStatus, captureStream, isAct
     video.setAttribute("playsinline", "");
     try { await video.play(); } catch {}
 
-    setStatus("📷 Scanner ready — point at barcode");
+    setStatus("📷 Scanner ready — tap to focus, point at barcode");
 
     const track = stream.getVideoTracks()[0];
+
+    // ===== Tap-to-focus (yellow ring) =====
+    const viewfinder = document.querySelector(".bulk-scan-viewfinder");
+    const focusRing = document.getElementById("singleFocusRing");
+    if (viewfinder && focusRing && track) {
+      viewfinder.addEventListener("click", async (e) => {
+        const rect = viewfinder.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        // Show ring
+        focusRing.style.left = x + "px";
+        focusRing.style.top = y + "px";
+        focusRing.classList.remove("show");
+        // force reflow
+        void focusRing.offsetWidth;
+        focusRing.classList.add("show");
+        // Try to refocus
+        try {
+          const caps = track.getCapabilities?.() || {};
+          if (caps.focusMode && caps.focusMode.includes("single-shot")) {
+            await track.applyConstraints({ advanced: [{ focusMode: "single-shot" }] });
+            setTimeout(async () => {
+              try { await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }); } catch {}
+            }, 1000);
+          }
+        } catch {}
+      });
+    }
     if (track) {
       try {
         const capabilities = track.getCapabilities?.() || {};
@@ -2750,6 +2923,8 @@ function renderAkashDeleted() {
 }
 
 function renderAkashHome() {
+  // Pre-warm camera in background — first scan opens instantly later
+  prewarmCamera();
   const myInstallations = loadInstallations().filter((inst) => inst.createdBy === "akash");
   const myMaintenance = loadMaintenance().filter((record) => record.createdBy === "akash");
   app.innerHTML = `
@@ -3400,6 +3575,8 @@ function renderInstallForm() {
     openBarcodeScannerModal({
       title: "📷 Scan IMEI",
       hint: "GPS device pe printed barcode ya QR code pe camera point karo.",
+      codeType: "imei",
+      checkDuplicates: true,
       onScan: (val) => {
         const cleaned = val.replace(/\D/g, "") || val.trim();
         const imeiInput = document.getElementById("instImei");
@@ -3413,11 +3590,13 @@ function renderInstallForm() {
     openBarcodeScannerModal({
       title: "📷 Scan SIM Barcode",
       hint: "SIM card pe printed long number ya barcode pe camera point karo.",
+      codeType: "iccid",
+      checkDuplicates: true,
       onScan: (val) => {
         const cleaned = val.replace(/\D/g, "") || val.trim();
         const input = document.getElementById("instSim");
         input.value = cleaned;
-        input.dispatchEvent(new Event("input")); // trigger live lookup
+        input.dispatchEvent(new Event("input"));
         showToast(`ICCID scanned: ${cleaned}`);
       },
     });
@@ -11284,4 +11463,5 @@ async function initApp() {
 }
 
 initApp();
+
 
