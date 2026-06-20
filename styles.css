@@ -9734,3 +9734,137 @@ button.clickable-card:focus-visible {
   }
 }
  
+/* ============================================================
+   v3.6.2 — Deleted Logs page upgrade
+   ============================================================ */
+ 
+/* Desktop table visible on wide screens, hidden on mobile */
+@media (max-width: 880px) {
+  .deletion-table-desktop {
+    display: none;
+  }
+}
+ 
+/* Mobile card grid */
+.deletion-card-grid {
+  display: none;
+}
+ 
+@media (max-width: 880px) {
+  .deletion-card-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    margin-top: 0.7rem;
+  }
+}
+ 
+.deletion-card {
+  background: linear-gradient(135deg, #fef2f2 0%, #ffffff 60%);
+  border-left: 4px solid #ef4444;
+}
+ 
+.deletion-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0;
+  border-top: 1px dashed #fecaca;
+  border-bottom: 1px dashed #fecaca;
+  margin: 0.5rem 0;
+}
+ 
+.del-row {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+ 
+.del-label {
+  color: #991b1b;
+  font-weight: 700;
+  min-width: 60px;
+  flex-shrink: 0;
+}
+ 
+.del-value {
+  color: #1e293b;
+  word-break: break-word;
+  flex: 1;
+}
+ 
+/* Snapshot modal */
+.snapshot-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.5rem;
+  margin: 0.8rem 0;
+  background: #f8fafc;
+  padding: 0.75rem;
+  border-radius: 8px;
+}
+ 
+.snap-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+ 
+.snap-meta span {
+  font-size: 0.7rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+ 
+.snap-meta strong {
+  font-size: 0.85rem;
+  color: #0f172a;
+  word-break: break-word;
+}
+ 
+.snapshot-json {
+  background: #0f172a;
+  color: #cbd5e1;
+  padding: 0.85rem;
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  max-height: 350px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+ 
+/* Filter row */
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  align-items: center;
+}
+ 
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+ 
+.filter-label {
+  font-size: 0.78rem;
+  color: #475569;
+  font-weight: 600;
+}
+ 
+.filter-group select {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: white;
+  font-size: 0.82rem;
+}
+ 
