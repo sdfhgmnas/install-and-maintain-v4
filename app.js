@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.6.5";
+const APP_VERSION = "3.6.6";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -9895,6 +9895,22 @@ function render() {
   }
   const sameView = _lastRenderedView === view;
 
+  // Capture focused input state so we can restore it after re-render.
+  // Without this, typing in any search box loses cursor every keystroke
+  // because innerHTML replacement destroys the old <input> element.
+  let focusSnapshot = null;
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA") && ae.id) {
+    focusSnapshot = {
+      id: ae.id,
+      start: ae.selectionStart,
+      end: ae.selectionEnd,
+      direction: ae.selectionDirection,
+      scrollTop: ae.scrollTop,
+      scrollLeft: ae.scrollLeft,
+    };
+  }
+
   switch (view) {
     case "login":
       renderLogin();
@@ -9950,6 +9966,25 @@ function render() {
       break;
     default:
       renderLogin();
+  }
+
+  // Restore focus on the same input element (by ID) if it still exists.
+  // Done synchronously before scroll restore so cursor doesn't visibly jump.
+  if (focusSnapshot) {
+    const reborn = document.getElementById(focusSnapshot.id);
+    if (reborn && (reborn.tagName === "INPUT" || reborn.tagName === "TEXTAREA")) {
+      try {
+        reborn.focus({ preventScroll: true });
+        if (typeof reborn.setSelectionRange === "function" && focusSnapshot.start != null) {
+          // Some input types (number, email, etc.) don't support setSelectionRange — try/catch is critical
+          try {
+            reborn.setSelectionRange(focusSnapshot.start, focusSnapshot.end, focusSnapshot.direction || "none");
+          } catch {}
+        }
+        reborn.scrollTop = focusSnapshot.scrollTop || 0;
+        reborn.scrollLeft = focusSnapshot.scrollLeft || 0;
+      } catch {}
+    }
   }
 
   // Restore scroll position after render
