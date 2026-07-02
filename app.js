@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.6.9";
+const APP_VERSION = "3.6.10";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -8069,8 +8069,14 @@ async function executeBulkSwap(swapped) {
 
   if (errorCount === 0) {
     showToast(`✓ ${successCount} SIM${successCount === 1 ? "" : "s"} swapped successfully.`);
+  } else if (successCount === 0) {
+    // All failed — show first error message for quick diagnosis
+    const firstErr = errors[0]?.message || "Unknown error";
+    console.error("All swaps failed. First error:", firstErr, "All errors:", errors);
+    showToast(`❌ 0 swapped, ${errorCount} failed. First error: ${firstErr.slice(0, 80)}. See console.`, true);
   } else {
-    showToast(`Done — ${successCount} OK, ${errorCount} failed. Check console.`, true);
+    console.error("Partial swap failures:", errors);
+    showToast(`⚠️ ${successCount} OK, ${errorCount} failed. See console for details.`, true);
   }
 }
 
@@ -8079,8 +8085,9 @@ async function executeBulkSwap(swapped) {
  * sources it came from (sims table, installation, stock metadata).
  */
 async function applySwap(entry) {
-  const newPrimary = entry.secondary;
-  const newSecondary = entry.primary;
+  const newPrimary = entry.secondary;   // what was in Secondary is now Primary
+  const newSecondary = entry.primary;   // what was in Primary is now Secondary
+  let didAnyUpdate = false;
 
   // 1) sims table entry
   if (entry.simRecordId) {
@@ -8088,34 +8095,56 @@ async function applySwap(entry) {
     if (existing) {
       const updated = {
         ...existing,
-        primaryNumber: newPrimary,
-        secondaryNumber: newSecondary,
+        primaryNumber: newPrimary || null,
+        secondaryNumber: newSecondary || null,
       };
       await updateSim(updated);
       const idx = sims.findIndex((s) => s.id === existing.id);
       if (idx >= 0) sims[idx] = updated;
+      didAnyUpdate = true;
     }
   }
 
-  // 2) installation entry — swap simHistory last item with secondarySim
+  // 2) installation entry — swap Primary (simHistory[last].value) and Secondary (inst.secondarySim)
+  //    CRITICAL: Preserve object shape of simHistory items. Never replace an entry with a string.
   if (entry.installId) {
     const inst = installations.find((i) => i.id === entry.installId);
     if (inst) {
-      const newHistory = [...(inst.simHistory || [])];
-      if (newHistory.length > 0) {
-        newHistory[newHistory.length - 1] = newPrimary;
-      } else {
-        newHistory.push(newPrimary);
+      // Deep-copy simHistory so we don't mutate cache
+      const newHistory = (inst.simHistory || []).map((h) =>
+        typeof h === "object" && h !== null ? { ...h } : { value: String(h || ""), addedAt: new Date().toISOString(), active: true, pendingDeactivation: false }
+      );
+
+      // Find the last active entry (or last entry)
+      let target = null;
+      for (let i = newHistory.length - 1; i >= 0; i--) {
+        if (newHistory[i].active) { target = newHistory[i]; break; }
       }
+      if (!target && newHistory.length > 0) target = newHistory[newHistory.length - 1];
+
+      if (target) {
+        target.value = newPrimary || "";
+        target.secondaryValue = newSecondary || "";
+      } else {
+        // Empty history — create new entry
+        newHistory.push({
+          value: newPrimary || "",
+          secondaryValue: newSecondary || "",
+          addedAt: new Date().toISOString(),
+          active: true,
+          pendingDeactivation: false,
+        });
+      }
+
       const updated = {
         ...inst,
         simHistory: newHistory,
-        secondarySim: newSecondary,
+        secondarySim: newSecondary || "",
       };
       await updateInstallation(updated);
-      // Update local cache too
       const idx = installations.findIndex((i) => i.id === inst.id);
       if (idx >= 0) installations[idx] = updated;
+      didAnyUpdate = true;
     }
   }
 
@@ -8124,15 +8153,22 @@ async function applySwap(entry) {
     const item = stockItems.find((s) => s.id === entry.stockItemId);
     if (item) {
       const newMeta = { ...(item.metadata || {}) };
-      // Old data may have ICCID in m.imei (bulk-scanned). Promote to secondary.
-      newMeta.primary = newPrimary;
-      newMeta.secondary = newSecondary;
-      delete newMeta.imei; // clean up: no longer needed since we have proper fields
+      newMeta.primary = newPrimary || "";
+      newMeta.secondary = newSecondary || "";
+      // Clean legacy field: bulk-scan used to store ICCID in metadata.imei
+      if (newMeta.imei && (newMeta.imei === entry.primary || newMeta.imei === entry.secondary)) {
+        delete newMeta.imei;
+      }
       const updated = { ...item, metadata: newMeta };
       await updateStockItem(updated);
       const idx = stockItems.findIndex((s) => s.id === item.id);
       if (idx >= 0) stockItems[idx] = updated;
+      didAnyUpdate = true;
     }
+  }
+
+  if (!didAnyUpdate) {
+    throw new Error(`Nothing to swap — entry has no valid source. Primary=${entry.primary}, Secondary=${entry.secondary}, sources=${(entry.sources || []).join(",")}`);
   }
 }
 
