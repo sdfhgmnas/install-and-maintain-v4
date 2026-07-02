@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.6.8";
+const APP_VERSION = "3.6.9";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -6650,7 +6650,9 @@ function renderInstallationsPage() {
       <section class="card">
         <div class="section-heading">
           <div>
-            <h2>All Installations (${allInstalls.length})</h2>
+            <h2>All Installations ${filtered.length !== allInstalls.length
+              ? `<span class="filter-count">(${filtered.length} of ${allInstalls.length})</span>`
+              : `(${allInstalls.length})`}</h2>
             <p class="section-subtitle">Every GPS device installed on the fleet. Use Edit to fix typos in vehicle / model / MAC / sensor.</p>
           </div>
           <div class="bulk-actions">
@@ -6912,7 +6914,9 @@ function renderRepairsPage() {
       <section class="card">
         <div class="section-heading">
           <div>
-            <h2>All Repair Work (${allMaint.length})</h2>
+            <h2>All Repair Work ${filtered.length !== allMaint.length
+              ? `<span class="filter-count">(${filtered.length} of ${allMaint.length})</span>`
+              : `(${allMaint.length})`}</h2>
             <p class="section-subtitle">Every repair / maintenance entry from the field, with pending follow-up status.</p>
           </div>
           <div class="bulk-actions">
@@ -9054,7 +9058,9 @@ function renderStockPage() {
       <section class="card">
         <div class="section-heading">
           <div>
-            <h2>All Items (${items.length})</h2>
+            <h2>All Items ${filtered.length !== items.length
+              ? `<span class="filter-count">(${filtered.length} of ${items.length})</span>`
+              : `(${items.length})`}</h2>
             <p class="section-subtitle">Track equipment, spares, and consumables. Stock is auto-consumed when Akash uses an item in an installation or repair.</p>
           </div>
           <div class="bulk-actions">
@@ -12034,4 +12040,5 @@ async function initApp() {
 }
 
 initApp();
+
 
