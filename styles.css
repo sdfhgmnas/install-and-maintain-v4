@@ -9931,3 +9931,22 @@ button.clickable-card:focus-visible {
   to   { background-position:  100% 0; }
 }
  
+/* ============================================================
+   v3.6.9 — Filter count badge in page headings
+   ============================================================ */
+ 
+.filter-count {
+  font-size: 0.72em;
+  color: #f97316;
+  background: #fff7ed;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid #fed7aa;
+  margin-left: 6px;
+  vertical-align: middle;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+ 
+
