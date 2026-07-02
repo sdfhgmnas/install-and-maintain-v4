@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.6.7";
+const APP_VERSION = "3.6.8";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -2580,7 +2580,13 @@ function getCurrentImei(inst) {
 
 function getCurrentSim(inst) {
   const active = [...inst.simHistory].reverse().find((s) => s.active);
-  return active?.value || inst.simHistory.at(-1)?.value || "";
+  const val = active?.value || inst.simHistory.at(-1)?.value || "";
+  // Defensive: simHistory.value should ONLY hold a Primary number (mobile no).
+  // If old data has an ICCID here (bug from v3.6.7 and earlier), don't return it
+  // as "current primary SIM" — return empty so it shows as "Missing" instead of
+  // polluting the Primary column of the unified SIM database.
+  if (val && isLikelyIccid(val)) return "";
+  return val;
 }
 
 function findInstallationByImei(imei) {
@@ -4036,7 +4042,9 @@ function handleInstallSubmit(gpsType = "FMB") {
       );
       const primaryValue = knownSim?.primaryNumber || null;
       const simHistEntry = {
-        value: primaryValue || enteredIccid,
+        // CRITICAL: value = Primary number ONLY. Never store ICCID here.
+        // If primary is unknown, leave empty. Admin fills later via task.
+        value: primaryValue || "",
         secondaryValue: enteredIccid,
         addedAt: now,
         active: true,
@@ -4877,11 +4885,40 @@ async function importRepairs(file) {
 
     if (simChange) {
       oldSimNo = currentSim;
+      // Look up primary number from SIM database — SAME as install form.
+      // Akash only enters ICCID, so we MUST resolve primary from DB or leave empty.
+      // Never store ICCID in simHistory.value.
+      const knownSimForChange = sims.find(
+        (s) => (s.secondaryNumber || "").toLowerCase() === newSimNo.toLowerCase()
+      );
+      const changePrimaryValue = knownSimForChange?.primaryNumber || null;
+
       inst.simHistory.forEach((item) => {
         if (item.active) item.pendingDeactivation = true;
       });
-      inst.simHistory.push({ value: newSimNo, addedAt: createdAt, active: true, pendingDeactivation: false });
+      inst.simHistory.push({
+        value: changePrimaryValue || "",     // Primary ONLY, never ICCID
+        secondaryValue: newSimNo,            // ICCID goes here
+        addedAt: createdAt,
+        active: true,
+        pendingDeactivation: false,
+      });
+      // Also update the installation's top-level secondarySim field
+      inst.secondarySim = newSimNo;
       simDeactivationPending = true;
+
+      // Auto-register the SIM in the sims table if not already there
+      if (!knownSimForChange) {
+        try {
+          await upsertSim({
+            primaryNumber: null,
+            secondaryNumber: newSimNo,
+            notes: `Auto-added from repair — ${inst.vehicleNo}`,
+          });
+        } catch (simErr) {
+          console.warn("Auto-register SIM (repair) failed:", simErr);
+        }
+      }
     }
     if (deviceChange) {
       oldImei = currentImei;
@@ -7365,7 +7402,20 @@ function buildUnifiedSimList() {
   // 2) From installations (current SIM in use)
   for (const inst of (installations || [])) {
     const primary = norm(getCurrentSim(inst));
-    const secondary = norm(inst.secondarySim);
+    // Prefer top-level secondarySim, fall back to the latest history entry's
+    // secondaryValue so old records that didn't set secondarySim still land in
+    // the correct column.
+    let secondary = norm(inst.secondarySim);
+    if (!secondary) {
+      const activeHist = [...(inst.simHistory || [])].reverse().find((s) => s.active) || (inst.simHistory || []).at(-1);
+      secondary = norm(activeHist?.secondaryValue);
+      // Last defense: if simHistory.value itself looks like an ICCID (buggy old
+      // data), treat it as the secondary rather than dropping it entirely.
+      if (!secondary) {
+        const v = norm(activeHist?.value);
+        if (v && isLikelyIccid(v)) secondary = v;
+      }
+    }
     if (!primary && !secondary) continue;
     upsert({
       id: `inst:${inst.id}`,
