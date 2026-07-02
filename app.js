@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.6.6";
+const APP_VERSION = "3.6.7";
 
 const USERS = {
   akash:   { password: "akash",     role: "akash" },
@@ -4144,13 +4144,22 @@ function renderRepairForm() {
             <label class="check-option"><input type="checkbox" id="workSimChange" /><span>SIM change</span></label>
             <div class="conditional-field hidden" id="newSimBox">
               <label for="newSimNo">New SIM ICCID (Secondary number — 20-digit printed on card) <span class="required">*</span></label>
-              <input type="text" id="newSimNo" placeholder="e.g. 89918720507069156677" autocomplete="off" inputmode="numeric" />
-              <p class="hint" id="newSimHint">Enter the 20-digit ICCID. The system will look up the primary number from the SIM database automatically.</p>
+              <div class="input-with-scan autocomplete-wrap">
+                <input type="text" id="newSimNo" placeholder="Type last 4-5 digits or full ICCID" autocomplete="off" inputmode="numeric" />
+                <button type="button" class="scan-btn" id="scanNewSim" aria-label="Scan new SIM barcode">📷</button>
+                <div class="autocomplete-dropdown" id="newSimDropdown"></div>
+              </div>
+              <p class="hint" id="newSimHint">Enter the 20-digit ICCID. System auto-checks Stock + SIM Database.</p>
             </div>
             <label class="check-option"><input type="checkbox" id="workDeviceChange" /><span>Device change</span></label>
             <div class="conditional-field hidden" id="newImeiBox">
               <label for="newImeiNo">New IMEI No <span class="required">*</span></label>
-              <input type="text" id="newImeiNo" placeholder="Enter new IMEI number" autocomplete="off" inputmode="numeric" />
+              <div class="input-with-scan autocomplete-wrap">
+                <input type="text" id="newImeiNo" placeholder="Type last 4-5 digits or full IMEI" autocomplete="off" inputmode="numeric" />
+                <button type="button" class="scan-btn" id="scanNewImei" aria-label="Scan new IMEI barcode">📷</button>
+                <div class="autocomplete-dropdown" id="newImeiDropdown"></div>
+              </div>
+              <p class="hint" id="newImeiHint"></p>
             </div>
             <label class="check-option"><input type="checkbox" id="workSensorOut" /><span>Sensor out for repair in office</span></label>
             <label class="check-option"><input type="checkbox" id="workSensorChanged" /><span>Sensor changed</span></label>
@@ -4239,25 +4248,227 @@ function renderRepairForm() {
   });
 
   // Live SIM lookup as Akash types the ICCID.
+  // ===== newSimNo — stock-aware lookup + autocomplete dropdown =====
+  function showRepairSimSuggestions(query) {
+    const dropdown = document.getElementById("newSimDropdown");
+    if (!dropdown) return;
+    const q = String(query || "").trim().toLowerCase();
+    if (q.length < 3) {
+      dropdown.classList.remove("show");
+      dropdown.innerHTML = "";
+      return;
+    }
+    const stockMatches = stockItems.filter((it) => {
+      if (categoryKind(it.category) !== "sim") return false;
+      if (it.quantity <= 0) return false;
+      const m = it.metadata || {};
+      const fields = [m.imei || "", m.secondary || "", m.primary || ""];
+      return fields.some((f) => f && (f.toLowerCase().endsWith(q) || f.toLowerCase().includes(q)));
+    }).slice(0, 5);
+    const simDbMatches = sims.filter((s) => {
+      const sec = (s.secondaryNumber || "").toLowerCase();
+      return sec && (sec.endsWith(q) || sec.includes(q));
+    }).slice(0, 5);
+    const rows = [];
+    for (const it of stockMatches) {
+      const m = it.metadata || {};
+      const iccid = m.secondary || m.imei || "";
+      if (!iccid) continue;
+      const idx = iccid.toLowerCase().lastIndexOf(q);
+      const before = escapeHtml(iccid.slice(0, idx));
+      const match = escapeHtml(iccid.slice(idx, idx + q.length));
+      const after = escapeHtml(iccid.slice(idx + q.length));
+      rows.push(`
+        <div class="autocomplete-item" data-value="${escapeHtml(iccid)}" data-name="${escapeHtml(it.name || '')}">
+          <div class="ac-main">
+            <span class="ac-value mono">${before}<strong>${match}</strong>${after}</span>
+            <span class="ac-name">${escapeHtml(it.name || "SIM")}</span>
+          </div>
+          <div class="ac-meta">📦 Stock: ${it.quantity}</div>
+        </div>
+      `);
+    }
+    for (const s of simDbMatches) {
+      const sec = s.secondaryNumber || "";
+      if (!sec) continue;
+      if (rows.some((r) => r.includes(`data-value="${escapeHtml(sec)}"`))) continue;
+      const idx = sec.toLowerCase().lastIndexOf(q);
+      const before = escapeHtml(sec.slice(0, idx));
+      const match = escapeHtml(sec.slice(idx, idx + q.length));
+      const after = escapeHtml(sec.slice(idx + q.length));
+      rows.push(`
+        <div class="autocomplete-item" data-value="${escapeHtml(sec)}" data-name="SIM DB">
+          <div class="ac-main">
+            <span class="ac-value mono">${before}<strong>${match}</strong>${after}</span>
+            <span class="ac-name">${s.primaryNumber ? `Primary: ${escapeHtml(s.primaryNumber)}` : "SIM Database"}</span>
+          </div>
+          <div class="ac-meta">📝 DB</div>
+        </div>
+      `);
+    }
+    if (rows.length === 0) {
+      dropdown.classList.remove("show");
+      dropdown.innerHTML = "";
+      return;
+    }
+    dropdown.innerHTML = rows.join("");
+    dropdown.classList.add("show");
+    dropdown.querySelectorAll(".autocomplete-item").forEach((row) => {
+      row.addEventListener("click", () => {
+        const fullVal = row.dataset.value;
+        const input = document.getElementById("newSimNo");
+        input.value = fullVal;
+        dropdown.classList.remove("show");
+        input.dispatchEvent(new Event("input"));
+        showToast(`✓ Selected: ${row.dataset.name}`);
+      });
+    });
+  }
+
+  function showRepairImeiSuggestions(query) {
+    const dropdown = document.getElementById("newImeiDropdown");
+    if (!dropdown) return;
+    const q = String(query || "").trim().toLowerCase();
+    if (q.length < 3) {
+      dropdown.classList.remove("show");
+      dropdown.innerHTML = "";
+      return;
+    }
+    const matches = stockItems.filter((it) => {
+      if (categoryKind(it.category) !== "gps") return false;
+      if (it.quantity <= 0) return false;
+      const imei = (it.metadata?.imei || "").toLowerCase();
+      return imei && (imei.endsWith(q) || imei.includes(q));
+    }).slice(0, 8);
+    if (matches.length === 0) {
+      dropdown.classList.remove("show");
+      dropdown.innerHTML = "";
+      return;
+    }
+    const rows = matches.map((it) => {
+      const imei = it.metadata?.imei || "";
+      const idx = imei.toLowerCase().lastIndexOf(q);
+      const before = escapeHtml(imei.slice(0, idx));
+      const match = escapeHtml(imei.slice(idx, idx + q.length));
+      const after = escapeHtml(imei.slice(idx + q.length));
+      return `
+        <div class="autocomplete-item" data-value="${escapeHtml(imei)}" data-name="${escapeHtml(it.name || '')}">
+          <div class="ac-main">
+            <span class="ac-value mono">${before}<strong>${match}</strong>${after}</span>
+            <span class="ac-name">${escapeHtml(it.name || "GPS")}</span>
+          </div>
+          <div class="ac-meta">📦 Stock: ${it.quantity}</div>
+        </div>
+      `;
+    }).join("");
+    dropdown.innerHTML = rows;
+    dropdown.classList.add("show");
+    dropdown.querySelectorAll(".autocomplete-item").forEach((row) => {
+      row.addEventListener("click", () => {
+        const input = document.getElementById("newImeiNo");
+        input.value = row.dataset.value;
+        dropdown.classList.remove("show");
+        input.dispatchEvent(new Event("input"));
+        showToast(`✓ Selected: ${row.dataset.name}`);
+      });
+    });
+  }
+
   document.getElementById("newSimNo")?.addEventListener("input", (e) => {
     const v = e.target.value.trim();
     const h = document.getElementById("newSimHint");
     if (!h) return;
+    showRepairSimSuggestions(v);
     if (!v) {
-      h.textContent = "Enter the 20-digit ICCID. The system will look up the primary number from the SIM database automatically.";
+      h.textContent = "Enter the 20-digit ICCID. System auto-checks Stock + SIM Database.";
       h.className = "hint";
       return;
     }
     const sim = findSimBySecondary(v);
-    if (sim && sim.primaryNumber) {
-      h.textContent = `✓ SIM matched in database — ready to use.`;
+    const stockMatched = findStockByValue(v);
+    const simStock = stockMatched.find((it) => categoryKind(it.category) === "sim");
+
+    if (simStock && sim && sim.primaryNumber) {
+      h.innerHTML = `✓ Found in <strong>Stock</strong> (${escapeHtml(simStock.name)}) + <strong>SIM DB</strong> — Primary: ${escapeHtml(sim.primaryNumber)}`;
+      h.className = "hint hint-ok";
+    } else if (simStock) {
+      h.innerHTML = `✓ Found in <strong>Stock</strong>: ${escapeHtml(simStock.name)}. Will auto-link on save.`;
+      h.className = "hint hint-ok";
+    } else if (sim && sim.primaryNumber) {
+      h.innerHTML = `✓ SIM matched in database — Primary: <strong>${escapeHtml(sim.primaryNumber)}</strong>`;
       h.className = "hint hint-ok";
     } else if (sim && !sim.primaryNumber) {
-      h.textContent = "⚠️ ICCID known to the SIM database but primary number is still pending. Admin will be asked to update it.";
+      h.textContent = "⚠️ ICCID known but primary number pending — admin will fill.";
       h.className = "hint hint-warn";
     } else {
-      h.textContent = "⚠️ ICCID not in SIM database yet. Admin will be asked to add the primary number after submission.";
-      h.className = "hint hint-warn";
+      h.textContent = "ℹ️ New ICCID — will auto-add to SIM database. Admin will fill primary later.";
+      h.className = "hint hint-info";
+    }
+  });
+
+  document.getElementById("newImeiNo")?.addEventListener("input", (e) => {
+    const v = e.target.value.trim();
+    const h = document.getElementById("newImeiHint");
+    if (!h) return;
+    showRepairImeiSuggestions(v);
+    if (!v || v.length < 8) {
+      h.textContent = "";
+      h.className = "hint";
+      return;
+    }
+    const matched = findStockByValue(v);
+    const gpsMatch = matched.find((it) => categoryKind(it.category) === "gps");
+    if (gpsMatch) {
+      h.innerHTML = `<span class="hint-found">✓ Found in Stock: <strong>${escapeHtml(gpsMatch.name)}</strong> — will auto-link on save.</span>`;
+      h.className = "hint hint-ok";
+    } else if (matched.length > 0) {
+      h.innerHTML = `<span class="hint-found">✓ Found in Stock: ${escapeHtml(matched[0].name)}</span>`;
+      h.className = "hint hint-ok";
+    } else {
+      h.textContent = "ℹ️ Not in stock database.";
+      h.className = "hint hint-info";
+    }
+  });
+
+  // Scan buttons for repair form
+  document.getElementById("scanNewSim")?.addEventListener("click", () => {
+    openBarcodeScannerModal({
+      title: "📷 Scan New SIM Barcode",
+      hint: "SIM card pe printed barcode ya QR code pe camera point karo.",
+      codeType: "iccid",
+      checkDuplicates: true,
+      dupCheckScope: "install", // repairing — stock match is EXPECTED
+      onScan: (val) => {
+        const cleaned = val.replace(/\D/g, "") || val.trim();
+        const input = document.getElementById("newSimNo");
+        input.value = cleaned;
+        input.dispatchEvent(new Event("input"));
+        showToast(`ICCID scanned: ${cleaned}`);
+      },
+    });
+  });
+  document.getElementById("scanNewImei")?.addEventListener("click", () => {
+    openBarcodeScannerModal({
+      title: "📷 Scan New IMEI",
+      hint: "GPS device pe printed barcode ya QR code pe camera point karo.",
+      codeType: "imei",
+      checkDuplicates: true,
+      dupCheckScope: "install",
+      onScan: (val) => {
+        const cleaned = val.replace(/\D/g, "") || val.trim();
+        const input = document.getElementById("newImeiNo");
+        input.value = cleaned;
+        input.dispatchEvent(new Event("input"));
+        showToast(`IMEI scanned: ${cleaned}`);
+      },
+    });
+  });
+
+  // Close autocomplete dropdowns on outside click
+  document.addEventListener("click", function _closeRepairAcDropdowns(e) {
+    if (!e.target.closest(".autocomplete-wrap")) {
+      document.getElementById("newSimDropdown")?.classList.remove("show");
+      document.getElementById("newImeiDropdown")?.classList.remove("show");
     }
   });
   deviceCheck.addEventListener("change", () => {
@@ -11773,5 +11984,4 @@ async function initApp() {
 }
 
 initApp();
-
 
