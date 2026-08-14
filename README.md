@@ -78,3 +78,5 @@ Change these in `app.js` (search for `currentUser`).
 ---
 
 Built with Claude. Hinglish UI + comments.
+
+
