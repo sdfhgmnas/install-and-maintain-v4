@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.8.0";
+const APP_VERSION = "3.8.1";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -12368,58 +12368,129 @@ const RENEWAL_CYCLE_DAYS = 365;
 
 /**
  * Calculate renewal status for a vehicle.
- * Returns: {currentYear, nextExpiryDate, daysUntilExpiry, status, paidYears}
- *   status: "paid" | "active" | "upcoming" | "soon" | "urgent" | "expired"
+ * Walks through payment history year-by-year to find the current cycle,
+ * respecting each payment's own cycle anchor (last_due_date vs payment_date).
+ * Flags OVERDUE when any past year has no payment but its cycle has ended.
+ *
+ * Returns: {
+ *   currentYear, cycleStart, cycleEnd, daysUntilExpiry, daysOverdue,
+ *   status, paidYears, oldestUnpaidYear, nextExpiryDate (alias cycleEnd)
+ * }
+ * status: "paid" | "active" | "upcoming" | "soon" | "urgent" | "expired" | "overdue"
+ *   - "overdue" = any PAST year unpaid AND that year's cycle already ended
+ *   - "expired" = CURRENT year cycle ended but <=30d old (ambiguous — treated same severity as urgent)
  */
+function addDaysLocal(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
 function computeRenewalStatus(renewal, today = new Date()) {
   const created = new Date(renewal.createdDate);
   if (isNaN(created.getTime())) {
     return { currentYear: 0, status: "unknown", daysUntilExpiry: null, nextExpiryDate: null, paidYears: [] };
   }
-  // Normalise to midnight
   created.setHours(0, 0, 0, 0);
   const now = new Date(today);
   now.setHours(0, 0, 0, 0);
 
-  const daysElapsed = Math.floor((now - created) / MS_PER_DAY);
-  // Current year = which 365-day block we are in (1-indexed)
-  const currentYear = Math.floor(daysElapsed / RENEWAL_CYCLE_DAYS) + 1;
+  // Build map: year -> payment
+  const paymentsByYear = {};
+  (renewal.payments || []).forEach((p) => { if (p.year) paymentsByYear[p.year] = p; });
+  const paidYears = Object.keys(paymentsByYear).map((y) => parseInt(y, 10)).sort((a, b) => a - b);
 
-  // Next expiry = created + (currentYear * 365) days
-  const nextExpiryDate = new Date(created);
-  nextExpiryDate.setDate(nextExpiryDate.getDate() + currentYear * RENEWAL_CYCLE_DAYS);
+  // Walk through years, computing cycle boundaries respecting each payment's anchor.
+  // The cycleEndDate of a paid year becomes the cycleStartDate of the next.
+  // For an unpaid year, cycle = previous_end + 365 (default behavior).
+  let cycleStart = new Date(created);
+  let year = 1;
+  const MAX_YEARS = 50; // safety
 
-  const daysUntilExpiry = Math.ceil((nextExpiryDate - now) / MS_PER_DAY);
+  while (year <= MAX_YEARS) {
+    const payment = paymentsByYear[year];
+    let cycleEnd;
 
-  // Which years have been paid?
-  const paidYears = (renewal.payments || []).map((p) => p.year).filter((y) => y != null);
-  const isCurrentYearPaid = paidYears.includes(currentYear);
+    if (payment) {
+      // Trust the stored cycleEndDate (set at payment time respecting anchor choice)
+      if (payment.cycleEndDate) {
+        cycleEnd = new Date(payment.cycleEndDate);
+      } else {
+        // Legacy payment without cycle metadata — default to cycleStart + 365
+        cycleEnd = addDaysLocal(cycleStart, RENEWAL_CYCLE_DAYS);
+      }
+      cycleEnd.setHours(0, 0, 0, 0);
+      // Move to next year
+      cycleStart = new Date(cycleEnd);
+      year += 1;
+      continue;
+    }
 
-  let status;
-  if (isCurrentYearPaid) status = "paid";
-  else if (daysUntilExpiry < 0) status = "expired";
-  else if (daysUntilExpiry <= 7) status = "urgent";
-  else if (daysUntilExpiry <= 15) status = "soon";
-  else if (daysUntilExpiry <= 30) status = "upcoming";
-  else status = "active";
+    // Unpaid year — compute hypothetical cycle end
+    cycleEnd = addDaysLocal(cycleStart, RENEWAL_CYCLE_DAYS);
+    cycleEnd.setHours(0, 0, 0, 0);
 
+    const daysUntilExpiry = Math.ceil((cycleEnd - now) / MS_PER_DAY);
+    const daysOverdue = daysUntilExpiry < 0 ? Math.abs(daysUntilExpiry) : 0;
+
+    // Check: is any EARLIER year unpaid too? If so, OVERDUE wins.
+    // (We're already walking in order, so if we reach an unpaid year with daysUntilExpiry < 0,
+    // AND the next year would also be due, we're in overdue territory for the oldest unpaid year.)
+    let status;
+    if (daysUntilExpiry < 0) {
+      // Past due — but is there a later cycle that's also started? If yes, mark overdue (not just expired)
+      // Compute if the "next next" cycle has started
+      const nextNextStart = cycleEnd;
+      const nextNextDaysElapsed = Math.floor((now - nextNextStart) / MS_PER_DAY);
+      if (nextNextDaysElapsed > 0) {
+        // We've entered the following year without paying this one → OVERDUE
+        status = "overdue";
+      } else {
+        // Just expired within current cycle window
+        status = "expired";
+      }
+    } else if (daysUntilExpiry <= 7) status = "urgent";
+    else if (daysUntilExpiry <= 15) status = "soon";
+    else if (daysUntilExpiry <= 30) status = "upcoming";
+    else status = "active";
+
+    return {
+      currentYear: year,
+      oldestUnpaidYear: year,
+      cycleStart: new Date(cycleStart),
+      cycleEnd,
+      nextExpiryDate: cycleEnd, // alias for backwards compat
+      daysUntilExpiry,
+      daysOverdue,
+      status,
+      paidYears,
+      isCurrentYearPaid: false,
+    };
+  }
+
+  // All years in loop paid up — means they're paid into the future.
+  // Current status is "paid" for the latest paid cycle.
   return {
-    currentYear,
-    nextExpiryDate,
-    daysUntilExpiry,
-    status,
+    currentYear: year - 1,
+    oldestUnpaidYear: null,
+    cycleStart: new Date(cycleStart),
+    cycleEnd: new Date(cycleStart), // no next unpaid cycle
+    nextExpiryDate: new Date(cycleStart),
+    daysUntilExpiry: Math.ceil((cycleStart - now) / MS_PER_DAY),
+    daysOverdue: 0,
+    status: "paid",
     paidYears,
-    isCurrentYearPaid,
-    daysElapsed,
+    isCurrentYearPaid: true,
   };
 }
 
 function renewalStatusMeta(status) {
   const metas = {
+    overdue:  { icon: "🚨", label: "OVERDUE",       pillClass: "status-overdue",  priority: 0 },
     expired:  { icon: "🔴", label: "EXPIRED",       pillClass: "status-expired",  priority: 1 },
-    urgent:   { icon: "🚨", label: "Urgent (≤7d)",  pillClass: "status-urgent",   priority: 2 },
-    soon:     { icon: "⚠️⚠️", label: "Soon (≤15d)", pillClass: "status-soon",    priority: 3 },
-    upcoming: { icon: "⚠️", label: "Upcoming (≤30d)",pillClass: "status-upcoming",priority: 4 },
+    urgent:   { icon: "⚠️", label: "Urgent (≤7d)",  pillClass: "status-urgent",   priority: 2 },
+    soon:     { icon: "⚠️", label: "Soon (≤15d)",   pillClass: "status-soon",     priority: 3 },
+    upcoming: { icon: "🔔", label: "Upcoming (≤30d)",pillClass: "status-upcoming",priority: 4 },
     active:   { icon: "🟢", label: "Active",        pillClass: "status-active",   priority: 5 },
     paid:     { icon: "✅", label: "Paid",          pillClass: "status-paid",     priority: 6 },
     unknown:  { icon: "❓", label: "Unknown",       pillClass: "status-unknown",  priority: 7 },
@@ -12483,6 +12554,7 @@ function renderRenewalsPage() {
   // Stats
   const stats = {
     total: decorated.length,
+    overdue: decorated.filter((d) => d.status.status === "overdue").length,
     expired: decorated.filter((d) => d.status.status === "expired").length,
     urgent: decorated.filter((d) => d.status.status === "urgent").length,
     soon: decorated.filter((d) => d.status.status === "soon").length,
@@ -12542,10 +12614,11 @@ function renderRenewalsPage() {
 
       <div class="summary-grid renewal-stats">
         <div class="summary-box"><strong>${stats.total}</strong><span>Total</span></div>
+        <div class="summary-box summary-critical"><strong>${stats.overdue}</strong><span>🚨 OVERDUE</span></div>
         <div class="summary-box summary-danger"><strong>${stats.expired}</strong><span>🔴 Expired</span></div>
-        <div class="summary-box summary-warn"><strong>${stats.urgent}</strong><span>🚨 Urgent (≤7d)</span></div>
-        <div class="summary-box summary-warn"><strong>${stats.soon}</strong><span>⚠️⚠️ Soon (≤15d)</span></div>
-        <div class="summary-box"><strong>${stats.upcoming}</strong><span>⚠️ Upcoming (≤30d)</span></div>
+        <div class="summary-box summary-warn"><strong>${stats.urgent}</strong><span>⚠️ Urgent (≤7d)</span></div>
+        <div class="summary-box summary-warn"><strong>${stats.soon}</strong><span>⚠️ Soon (≤15d)</span></div>
+        <div class="summary-box"><strong>${stats.upcoming}</strong><span>🔔 Upcoming (≤30d)</span></div>
         <div class="summary-box summary-ok"><strong>${stats.active}</strong><span>🟢 Active</span></div>
         <div class="summary-box summary-purple"><strong>${stats.paid}</strong><span>✅ Paid (current)</span></div>
         <div class="summary-box summary-info"><strong>₹${totalReceived.toLocaleString("en-IN")}</strong><span>💰 Collected</span></div>
@@ -12573,10 +12646,11 @@ function renderRenewalsPage() {
             <span class="filter-label">Status:</span>
             <select id="renewalStatusFilter">
               <option value="all" ${renewalsStatusFilter === "all" ? "selected" : ""}>All</option>
+              <option value="overdue" ${renewalsStatusFilter === "overdue" ? "selected" : ""}>🚨 OVERDUE (${stats.overdue})</option>
               <option value="expired" ${renewalsStatusFilter === "expired" ? "selected" : ""}>🔴 Expired (${stats.expired})</option>
-              <option value="urgent" ${renewalsStatusFilter === "urgent" ? "selected" : ""}>🚨 Urgent (${stats.urgent})</option>
-              <option value="soon" ${renewalsStatusFilter === "soon" ? "selected" : ""}>⚠️⚠️ Soon (${stats.soon})</option>
-              <option value="upcoming" ${renewalsStatusFilter === "upcoming" ? "selected" : ""}>⚠️ Upcoming (${stats.upcoming})</option>
+              <option value="urgent" ${renewalsStatusFilter === "urgent" ? "selected" : ""}>⚠️ Urgent (${stats.urgent})</option>
+              <option value="soon" ${renewalsStatusFilter === "soon" ? "selected" : ""}>⚠️ Soon (${stats.soon})</option>
+              <option value="upcoming" ${renewalsStatusFilter === "upcoming" ? "selected" : ""}>🔔 Upcoming (${stats.upcoming})</option>
               <option value="active" ${renewalsStatusFilter === "active" ? "selected" : ""}>🟢 Active (${stats.active})</option>
               <option value="paid" ${renewalsStatusFilter === "paid" ? "selected" : ""}>✅ Paid (${stats.paid})</option>
             </select>
@@ -12630,12 +12704,15 @@ function renderRenewalsPage() {
                 <tr class="empty-row"><td colspan="9">${decorated.length === 0 ? "No renewals yet. Click ↑ Upload Excel." : "No renewals match your filters."}</td></tr>
               ` : filtered.map(({ renewal: r, status }) => {
                 const meta = renewalStatusMeta(status.status);
+                const isOverdue = status.status === "overdue";
                 const daysText = status.daysUntilExpiry === null ? "—"
+                  : isOverdue ? `overdue by ${status.daysOverdue} days`
                   : status.daysUntilExpiry < 0 ? `${Math.abs(status.daysUntilExpiry)} days ago`
                   : status.daysUntilExpiry === 0 ? "Today"
                   : `in ${status.daysUntilExpiry} days`;
+                const payYear = status.oldestUnpaidYear || status.currentYear;
                 return `
-                  <tr>
+                  <tr class="${isOverdue ? 'row-overdue' : ''}">
                     <td><span class="status-pill ${meta.pillClass}">${meta.icon} ${escapeHtml(meta.label.split(" ")[0])}</span></td>
                     <td>
                       <strong>${escapeHtml(r.plateNumber || "—")}</strong><br>
@@ -12650,14 +12727,14 @@ function renderRenewalsPage() {
                     <td class="date-cell">${formatDateIndian(r.createdDate)}</td>
                     <td class="date-cell">
                       ${formatDateIndian(status.nextExpiryDate)}<br>
-                      <span style="font-size:0.72rem; color:${status.daysUntilExpiry < 0 ? '#dc2626' : '#64748b'};">${daysText}</span>
+                      <span style="font-size:0.72rem; font-weight:${isOverdue ? '700' : '400'}; color:${(isOverdue || status.daysUntilExpiry < 0) ? '#dc2626' : '#64748b'};">${daysText}</span>
                     </td>
                     <td>Y${status.currentYear}</td>
                     <td class="row-actions">
                       ${status.status === "paid" ? `
                         <button type="button" class="btn btn-outline btn-sm view-payments-btn" data-id="${escapeHtml(r.id)}" title="View payments">💰 Paid Y${status.currentYear}</button>
                       ` : `
-                        <button type="button" class="btn btn-primary btn-sm collect-payment-btn" data-id="${escapeHtml(r.id)}" data-year="${status.currentYear}">💰 Mark Paid</button>
+                        <button type="button" class="btn btn-primary btn-sm collect-payment-btn ${isOverdue ? 'btn-critical' : ''}" data-id="${escapeHtml(r.id)}" data-year="${payYear}">💰 Pay Year ${payYear}</button>
                       `}
                       <button type="button" class="btn btn-outline btn-sm renewal-history-btn" data-id="${escapeHtml(r.id)}" title="Payment history">📋</button>
                       ${isAdmin ? `<button type="button" class="btn btn-outline btn-sm renewal-delete-btn" data-id="${escapeHtml(r.id)}" title="Delete">🗑</button>` : ""}
@@ -12679,10 +12756,13 @@ function renderRenewalsPage() {
             </div>
           ` : filtered.map(({ renewal: r, status }) => {
             const meta = renewalStatusMeta(status.status);
+            const isOverdue = status.status === "overdue";
             const daysText = status.daysUntilExpiry === null ? "—"
+              : isOverdue ? `overdue by ${status.daysOverdue}d`
               : status.daysUntilExpiry < 0 ? `expired ${Math.abs(status.daysUntilExpiry)}d ago`
               : status.daysUntilExpiry === 0 ? "today"
               : `in ${status.daysUntilExpiry}d`;
+            const payYear = status.oldestUnpaidYear || status.currentYear;
             return `
               <article class="tk-card renewal-card ${meta.pillClass}-card">
                 <div class="tk-card-head">
@@ -12695,14 +12775,15 @@ function renderRenewalsPage() {
                   <div class="mono" style="font-size:0.75rem;">IMEI: ${escapeHtml(r.imei)}</div>
                   <div class="mono" style="font-size:0.75rem;">SIM: ${escapeHtml(r.simNumber || "—")} ${r.simProvider ? `(${escapeHtml(r.simProvider)})` : ""}</div>
                   <div style="font-size:0.78rem; margin-top:0.3rem;">
-                    Expiry: <strong>${formatDateIndian(status.nextExpiryDate)}</strong> <span style="color:${status.daysUntilExpiry < 0 ? '#dc2626' : '#64748b'};">(${daysText})</span>
+                    Expiry: <strong>${formatDateIndian(status.nextExpiryDate)}</strong>
+                    <span style="font-weight:${isOverdue ? '700' : '400'}; color:${(isOverdue || status.daysUntilExpiry < 0) ? '#dc2626' : '#64748b'};">(${daysText})</span>
                   </div>
                 </div>
                 <div class="tk-actions">
                   ${status.status === "paid" ? `
                     <button type="button" class="btn btn-outline btn-sm view-payments-btn" data-id="${escapeHtml(r.id)}">💰 Paid Y${status.currentYear}</button>
                   ` : `
-                    <button type="button" class="btn btn-primary btn-sm collect-payment-btn" data-id="${escapeHtml(r.id)}" data-year="${status.currentYear}">💰 Mark Paid</button>
+                    <button type="button" class="btn btn-primary btn-sm collect-payment-btn ${isOverdue ? 'btn-critical' : ''}" data-id="${escapeHtml(r.id)}" data-year="${payYear}">💰 Pay Year ${payYear}</button>
                   `}
                   <button type="button" class="btn btn-outline btn-sm renewal-history-btn" data-id="${escapeHtml(r.id)}">📋 History</button>
                   ${isAdmin ? `<button type="button" class="btn btn-outline btn-sm renewal-delete-btn" data-id="${escapeHtml(r.id)}">🗑</button>` : ""}
@@ -12776,21 +12857,77 @@ function renderRenewalsPage() {
 }
 
 /* ---------- Payment collection modal ---------- */
+/**
+ * Computes the "last due date" for a year — the end of the previous year's cycle,
+ * respecting any stored anchor choices from earlier payments.
+ */
+function computeLastDueDateForYear(renewal, forYear) {
+  const created = new Date(renewal.createdDate);
+  created.setHours(0, 0, 0, 0);
+  if (forYear === 1) return new Date(created); // Year 1 cycle starts at creation
+
+  const paymentsByYear = {};
+  (renewal.payments || []).forEach((p) => { if (p.year) paymentsByYear[p.year] = p; });
+
+  let cycleStart = new Date(created);
+  for (let y = 1; y < forYear; y++) {
+    const p = paymentsByYear[y];
+    if (p && p.cycleEndDate) {
+      cycleStart = new Date(p.cycleEndDate);
+    } else {
+      cycleStart = addDaysLocal(cycleStart, RENEWAL_CYCLE_DAYS);
+    }
+    cycleStart.setHours(0, 0, 0, 0);
+  }
+  return cycleStart; // this is where the FOR-YEAR cycle starts (= last due date)
+}
+
 function openCollectPaymentModal(renewalId, year) {
   const r = renewals.find((x) => x.id === renewalId);
   if (!r) return;
+  const perms = getUserPerms(currentUser);
+  const isAdmin = perms?.isAdmin;
   const today = formatYMD(new Date());
+  const todayDate = new Date();
+  todayDate.setHours(0, 0, 0, 0);
+
+  // The "last due date" for THIS year = end of previous year's cycle (= where this year started)
+  const lastDueDate = computeLastDueDateForYear(r, year);
+  const lastDueDateYMD = formatYMD(lastDueDate);
+
+  // Compute both expiry options for preview
+  const nextExpiryFromLastDue = addDaysLocal(lastDueDate, RENEWAL_CYCLE_DAYS);
+  const nextExpiryFromToday = addDaysLocal(todayDate, RENEWAL_CYCLE_DAYS);
+
+  // Status check for banner
+  const status = computeRenewalStatus(r);
+  const isOverdue = status.status === "overdue";
+
   modal.innerHTML = `
-    <h3>💰 Mark Payment Collected</h3>
+    <h3>💰 Record Payment — Year ${year}</h3>
     <p class="modal-desc">
       <strong>${escapeHtml(r.plateNumber)}</strong> · ${escapeHtml(r.vehicleName || "")}<br>
-      <span style="color:#64748b;">Company: ${escapeHtml(r.company || "—")} · IMEI: ${escapeHtml(r.imei)}</span>
+      <span style="color:#64748b;">${escapeHtml(r.company || "—")} · IMEI: ${escapeHtml(r.imei)}</span>
     </p>
-    <div class="payment-form">
-      <div class="form-row">
-        <label>Year:</label>
-        <input type="number" id="payYear" value="${year}" min="1" max="20" class="input-sm" />
+
+    ${isOverdue ? `
+      <div class="overdue-notice">
+        🚨 <strong>Year ${year} is OVERDUE by ${status.daysOverdue} days.</strong> Collect this year first.
       </div>
+    ` : ""}
+
+    <div class="payment-form">
+      <div class="form-row-grid">
+        <div class="form-row">
+          <label>Year (auto-locked)</label>
+          <input type="number" id="payYear" value="${year}" min="1" max="20" readonly class="input-sm input-locked" />
+        </div>
+        <div class="form-row">
+          <label>Last Due Date</label>
+          <input type="text" value="${formatDateIndian(lastDueDate)}" readonly class="input-locked" />
+        </div>
+      </div>
+
       <div class="form-row">
         <label>Collection Date <span class="required">*</span></label>
         <input type="date" id="payDate" value="${today}" required />
@@ -12813,6 +12950,35 @@ function openCollectPaymentModal(renewalId, year) {
           <option value="other">Other</option>
         </select>
       </div>
+
+      <!-- Cycle anchor choice -->
+      <div class="form-row">
+        <label>Next cycle starts from: <span class="required">*</span></label>
+        <div class="anchor-choices">
+          <label class="anchor-option">
+            <input type="radio" name="cycleAnchor" value="last_due_date" checked />
+            <div class="anchor-body">
+              <div class="anchor-title">📅 From last due date <span class="badge-default">DEFAULT</span></div>
+              <div class="anchor-desc">
+                Standard renewal — cycle starts <strong>${formatDateIndian(lastDueDate)}</strong>.
+                Year ${year + 1} will expire <strong>${formatDateIndian(nextExpiryFromLastDue)}</strong>.
+              </div>
+            </div>
+          </label>
+          <label class="anchor-option ${!isAdmin ? 'anchor-disabled' : ''}">
+            <input type="radio" name="cycleAnchor" value="payment_date" ${!isAdmin ? 'disabled' : ''} />
+            <div class="anchor-body">
+              <div class="anchor-title">💳 From payment date ${!isAdmin ? '<span class="badge-locked">🔒 Admin only</span>' : '<span class="badge-special">SPECIAL</span>'}</div>
+              <div class="anchor-desc">
+                Grants extra days — cycle starts <strong>${formatDateIndian(todayDate)}</strong>.
+                Year ${year + 1} will expire <strong>${formatDateIndian(nextExpiryFromToday)}</strong>.
+                ${!isAdmin ? '<br><em style="color:#dc2626;">Collector cannot select this. Ask admin to record if customer needs extra days.</em>' : ''}
+              </div>
+            </div>
+          </label>
+        </div>
+      </div>
+
       <div class="form-row">
         <label>Notes (optional)</label>
         <textarea id="payNotes" rows="2" placeholder="Any additional details..."></textarea>
@@ -12827,6 +12993,29 @@ function openCollectPaymentModal(renewalId, year) {
   modal.querySelector('[data-act="cancel"]').onclick = closeModal;
   modalOverlay.onclick = (e) => { if (e.target === modalOverlay) closeModal(); };
 
+  // Live preview update when anchor changes (payment date changes from today's default)
+  const payDateInput = document.getElementById("payDate");
+  const anchorPaymentOption = modal.querySelector('input[value="payment_date"]');
+  const paymentOptionDesc = anchorPaymentOption?.closest(".anchor-option")?.querySelector(".anchor-desc");
+
+  const refreshPreview = () => {
+    if (!paymentOptionDesc) return;
+    const d = payDateInput.value;
+    if (!d) return;
+    const payDate = new Date(d);
+    payDate.setHours(0, 0, 0, 0);
+    const nextFromPay = addDaysLocal(payDate, RENEWAL_CYCLE_DAYS);
+    // Only update if admin can see it
+    const existingText = paymentOptionDesc.innerHTML;
+    if (!existingText.includes('Admin only')) {
+      paymentOptionDesc.innerHTML = `
+        Grants extra days — cycle starts <strong>${formatDateIndian(payDate)}</strong>.
+        Year ${year + 1} will expire <strong>${formatDateIndian(nextFromPay)}</strong>.
+      `;
+    }
+  };
+  payDateInput?.addEventListener("change", refreshPreview);
+
   const confirmBtn = modal.querySelector(".modal-confirm");
   confirmBtn.addEventListener("click", async () => {
     if (confirmBtn.dataset.busy === "1") return;
@@ -12836,11 +13025,28 @@ function openCollectPaymentModal(renewalId, year) {
     const receipt = document.getElementById("payReceipt").value.trim();
     const mode = document.getElementById("payMode").value;
     const notes = document.getElementById("payNotes").value.trim();
+    const anchorChoice = modal.querySelector('input[name="cycleAnchor"]:checked')?.value || "last_due_date";
 
     if (!date || !amount || amount <= 0 || !mode || isNaN(payYear) || payYear < 1) {
-      showToast("Please fill Year, Date, Amount, and Mode.", true);
+      showToast("Please fill Date, Amount, and Mode.", true);
       return;
     }
+
+    // Enforce: collector cannot pick payment_date
+    if (anchorChoice === "payment_date" && !isAdmin) {
+      showToast("Only admin can shift cycle to payment date. Selected default instead.", true);
+      return;
+    }
+
+    // Compute the actual cycle end date based on anchor choice
+    let cycleStartDate;
+    if (anchorChoice === "payment_date") {
+      cycleStartDate = new Date(date);
+    } else {
+      cycleStartDate = new Date(lastDueDate);
+    }
+    cycleStartDate.setHours(0, 0, 0, 0);
+    const cycleEndDate = addDaysLocal(cycleStartDate, RENEWAL_CYCLE_DAYS);
 
     await runWithBusyButton(confirmBtn, async () => {
       try {
@@ -12856,12 +13062,17 @@ function openCollectPaymentModal(renewalId, year) {
           notes: notes || null,
           collectedBy: currentUser,
           collectedAt: new Date().toISOString(),
+          // v3.8.1 cycle metadata
+          cycleAnchorMode: anchorChoice,
+          cycleStartDate: formatYMD(cycleStartDate),
+          cycleEndDate: formatYMD(cycleEndDate),
+          approvedBy: anchorChoice === "payment_date" ? currentUser : null,
         });
         const updated = await updateRenewalPayments(renewalId, payments);
         const idx = renewals.findIndex((x) => x.id === renewalId);
         if (idx >= 0) renewals[idx] = updated;
         closeModal();
-        showToast(`✓ Payment saved for ${current.plateNumber}`);
+        showToast(`✓ Payment saved · Year ${payYear + 1} will expire ${formatDateIndian(cycleEndDate)}`);
         render();
       } catch (err) {
         showToast(err.message || "Failed to save payment.", true);
@@ -12889,7 +13100,13 @@ function openPaymentHistoryModal(renewalId) {
     <div class="payment-history-list">
       ${payments.length === 0 ? `
         <div class="entry-empty"><p>No payments recorded yet.</p></div>
-      ` : payments.map((p) => `
+      ` : payments.map((p) => {
+        const anchorText = p.cycleAnchorMode === "payment_date"
+          ? `<span class="phi-anchor phi-anchor-special">💳 From payment date</span>`
+          : p.cycleAnchorMode === "last_due_date"
+          ? `<span class="phi-anchor phi-anchor-default">📅 From last due date</span>`
+          : "";
+        return `
         <div class="payment-history-item">
           <div class="phi-head">
             <span class="phi-year">Year ${p.year}</span>
@@ -12899,11 +13116,12 @@ function openPaymentHistoryModal(renewalId) {
           <div class="phi-body">
             <div>📅 ${formatDateIndian(p.date)} · ${escapeHtml(p.mode || "")}</div>
             ${p.receiptNumber ? `<div>🧾 ${escapeHtml(p.receiptNumber)}</div>` : ""}
+            ${p.cycleEndDate ? `<div>🔁 Next cycle expires: <strong>${formatDateIndian(p.cycleEndDate)}</strong> ${anchorText}</div>` : ""}
             <div style="font-size:0.72rem; color:#94a3b8;">By ${escapeHtml(p.collectedBy || "?")} on ${p.collectedAt ? new Date(p.collectedAt).toLocaleString("en-IN") : "?"}</div>
             ${p.notes ? `<div style="font-size:0.78rem; color:#64748b; margin-top:0.3rem;">${escapeHtml(p.notes)}</div>` : ""}
           </div>
-        </div>
-      `).join("")}
+        </div>`;
+      }).join("")}
     </div>
     <div class="payment-total">Total collected: <strong>₹${totalPaid.toLocaleString("en-IN")}</strong></div>
     <div class="modal-actions">
@@ -13128,6 +13346,7 @@ function exportRenewalsToExcel(list) {
     const status = r._status || computeRenewalStatus(r);
     const totalPaid = (r.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
     const paidYears = (r.payments || []).map((p) => p.year).sort().join(", ");
+    const specialAnchors = (r.payments || []).filter((p) => p.cycleAnchorMode === "payment_date").length;
     return {
       "Plate Number": r.plateNumber,
       "Vehicle Name": r.vehicleName,
@@ -13142,8 +13361,10 @@ function exportRenewalsToExcel(list) {
       "Current Year": status.currentYear,
       "Next Expiry": formatYMD(status.nextExpiryDate),
       "Days to Expiry": status.daysUntilExpiry,
+      "Overdue Days": status.daysOverdue || 0,
       "Status": renewalStatusMeta(status.status).label,
       "Years Paid": paidYears,
+      "Special Cycle Shifts": specialAnchors,
       "Total Collected (₹)": totalPaid,
     };
   });

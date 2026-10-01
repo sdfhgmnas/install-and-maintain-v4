@@ -10434,3 +10434,219 @@ button.clickable-card:focus-visible {
 /* Summary box variants */
 .summary-info strong { color: #0891b2; }
 .summary-purple strong { color: #8b5cf6; }
+
+/* ============================================================
+   v3.8.1 — OVERDUE status + cycle anchor UI
+   ============================================================ */
+
+/* OVERDUE pill — more severe than EXPIRED (dark red, pulsing) */
+.status-overdue {
+  background: #7f1d1d;
+  color: #ffffff;
+  border-color: #450a0a;
+  animation: overdue-pulse 2s ease-in-out infinite;
+  font-weight: 800;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.35);
+}
+
+@keyframes overdue-pulse {
+  0%, 100% { box-shadow: 0 0 6px rgba(239, 68, 68, 0.30); }
+  50%      { box-shadow: 0 0 16px rgba(239, 68, 68, 0.65); }
+}
+
+.status-overdue-card {
+  border-left: 4px solid #7f1d1d;
+  background: linear-gradient(135deg, #fef2f2 0%, #ffffff 60%);
+}
+
+/* Row highlight when overdue in table */
+.row-overdue {
+  background: #fef2f2 !important;
+}
+
+.row-overdue:hover {
+  background: #fee2e2 !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .row-overdue { background: #450a0a !important; }
+  .row-overdue:hover { background: #7f1d1d !important; }
+}
+
+/* Overdue stat box */
+.summary-critical {
+  border-left-color: #7f1d1d !important;
+  background: linear-gradient(135deg, #fef2f2 0%, #ffffff 60%);
+}
+
+.summary-critical strong {
+  color: #7f1d1d !important;
+  font-weight: 800;
+}
+
+/* Critical button (overdue action) */
+.btn-critical {
+  background: #7f1d1d !important;
+  color: white !important;
+  border-color: #450a0a !important;
+  animation: critical-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes critical-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.35); }
+  50%      { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.00); }
+}
+
+.btn-critical:hover { background: #991b1b !important; }
+
+/* Overdue notice banner (inside payment modal) */
+.overdue-notice {
+  background: #fef2f2;
+  border: 2px solid #fecaca;
+  border-left: 4px solid #7f1d1d;
+  color: #7f1d1d;
+  padding: 0.7rem 1rem;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  margin: 0.5rem 0 1rem;
+}
+
+/* Form row grid (year + last due date side by side) */
+.form-row-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.7rem;
+}
+
+@media (max-width: 560px) {
+  .form-row-grid { grid-template-columns: 1fr; }
+}
+
+.input-locked {
+  background: #f1f5f9 !important;
+  color: #475569 !important;
+  cursor: not-allowed;
+  font-weight: 600;
+}
+
+/* Cycle anchor radio options */
+.anchor-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.3rem;
+}
+
+.anchor-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.75rem 0.9rem;
+  border: 2px solid #e2e8f0;
+  border-radius: 10px;
+  cursor: pointer;
+  background: #ffffff;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.anchor-option:has(input:checked) {
+  border-color: #0891b2;
+  background: #ecfeff;
+}
+
+.anchor-option.anchor-disabled {
+  background: #f8fafc;
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.anchor-option.anchor-disabled:has(input:disabled) {
+  border-color: #e2e8f0;
+}
+
+.anchor-option input[type="radio"] {
+  margin-top: 2px;
+  accent-color: #0891b2;
+}
+
+.anchor-body {
+  flex: 1;
+}
+
+.anchor-title {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: #0f172a;
+  margin-bottom: 0.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.anchor-desc {
+  font-size: 0.8rem;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.anchor-desc strong {
+  color: #0f172a;
+}
+
+.badge-default {
+  background: #ecfeff;
+  color: #0891b2;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border: 1px solid #a5f3fc;
+}
+
+.badge-special {
+  background: #fef3c7;
+  color: #92400e;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border: 1px solid #fde68a;
+}
+
+.badge-locked {
+  background: #f3f4f6;
+  color: #6b7280;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border: 1px solid #d1d5db;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .anchor-option { background: #1e293b; border-color: #334155; }
+  :root:not([data-theme="light"]) .anchor-option:has(input:checked) { background: #164e63; border-color: #22d3ee; }
+  :root:not([data-theme="light"]) .anchor-title { color: #f1f5f9; }
+  :root:not([data-theme="light"]) .anchor-desc { color: #cbd5e1; }
+  :root:not([data-theme="light"]) .anchor-desc strong { color: #f1f5f9; }
+  :root:not([data-theme="light"]) .input-locked { background: #334155 !important; color: #cbd5e1 !important; }
+  :root:not([data-theme="light"]) .overdue-notice { background: #450a0a; color: #fca5a5; border-color: #7f1d1d; }
+}
+
+
+/* Payment history anchor pill */
+.phi-anchor {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.phi-anchor-default { background: #ecfeff; color: #0891b2; border: 1px solid #a5f3fc; }
+.phi-anchor-special { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
