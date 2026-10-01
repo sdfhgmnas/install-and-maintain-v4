@@ -2,18 +2,18 @@ let dbClient = null;
 // Cache reference to the backend SDK lazily — the SDK is loaded via a script
 // tag, but module evaluation order can vary. Read it at init() time.
 let _backendSDK = null;
- 
+
 const BUILT_IN_API_URL = "https://jzclmcjurfehpfybxryh.supabase.co";
 const BUILT_IN_API_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp6Y2xtY2p1cmZlaHBmeWJ4cnloIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk2NDI2NDcsImV4cCI6MjA5NTIxODY0N30.pdB45v7uBRzsh6M_Vrb43-SV_kLMwjGHpi9-uBuqHmw";
- 
+
 function getApiSettings() {
   return {
     url: window.API_URL || BUILT_IN_API_URL,
     anonKey: window.API_KEY || BUILT_IN_API_KEY,
   };
 }
- 
+
 function isApiConfigured() {
   const { url, anonKey } = getApiSettings();
   return Boolean(
@@ -23,7 +23,7 @@ function isApiConfigured() {
       !anonKey.includes("YOUR_ANON")
   );
 }
- 
+
 function initDb() {
   if (!isApiConfigured()) {
     throw new Error("Server is not configured. Please contact administrator.");
@@ -33,7 +33,7 @@ function initDb() {
     _backendSDK = (typeof window !== "undefined" && window.supabase) ? window.supabase : null;
   }
   if (!_backendSDK || !_backendSDK.createClient) {
-    throw new Error("Backend SDK failed to load. Please refresh the page.");
+    throw new Error("Backend SDK failed to load. Please check your internet connection.");
   }
   const { url, anonKey } = getApiSettings();
   dbClient = _backendSDK.createClient(url, anonKey, {
@@ -41,12 +41,12 @@ function initDb() {
   });
   return dbClient;
 }
- 
+
 function getDb() {
   if (!dbClient) initDb();
   return dbClient;
 }
- 
+
 function rowToInstallation(row) {
   return {
     id: row.id,
@@ -62,7 +62,7 @@ function rowToInstallation(row) {
     createdBy: row.created_by,
   };
 }
- 
+
 function installationToRow(inst) {
   return {
     id: inst.id,
@@ -78,7 +78,7 @@ function installationToRow(inst) {
     created_by: inst.createdBy,
   };
 }
- 
+
 function rowToMaintenance(row) {
   return {
     id: row.id,
@@ -104,7 +104,7 @@ function rowToMaintenance(row) {
     createdBy: row.created_by,
   };
 }
- 
+
 function maintenanceToRow(record) {
   return {
     id: record.id,
@@ -130,38 +130,38 @@ function maintenanceToRow(record) {
     created_by: record.createdBy,
   };
 }
- 
+
 async function fetchInstallations() {
   const { data, error } = await getDb()
     .from("installations")
     .select("*")
     .order("created_at", { ascending: false });
- 
+
   if (error) throw new Error(error.message);
   return (data || []).map(rowToInstallation);
 }
- 
+
 async function fetchMaintenanceRecords() {
   const { data, error } = await getDb()
     .from("maintenance_records")
     .select("*")
     .order("created_at", { ascending: false });
- 
+
   if (error) throw new Error(error.message);
   return (data || []).map(rowToMaintenance);
 }
- 
+
 async function insertInstallation(inst) {
   const { data, error } = await getDb()
     .from("installations")
     .insert(installationToRow(inst))
     .select()
     .single();
- 
+
   if (error) throw new Error(error.message);
   return rowToInstallation(data);
 }
- 
+
 // Updates all editable fields including the admin-managed secondary SIM.
 async function updateInstallation(inst) {
   const { data, error } = await getDb()
@@ -179,22 +179,22 @@ async function updateInstallation(inst) {
     .eq("id", inst.id)
     .select()
     .single();
- 
+
   if (error) throw new Error(error.message);
   return rowToInstallation(data);
 }
- 
+
 async function insertMaintenanceRecord(record) {
   const { data, error } = await getDb()
     .from("maintenance_records")
     .insert(maintenanceToRow(record))
     .select()
     .single();
- 
+
   if (error) throw new Error(error.message);
   return rowToMaintenance(data);
 }
- 
+
 async function updateMaintenanceRecord(record) {
   const { data, error } = await getDb()
     .from("maintenance_records")
@@ -207,11 +207,11 @@ async function updateMaintenanceRecord(record) {
     .eq("id", record.id)
     .select()
     .single();
- 
+
   if (error) throw new Error(error.message);
   return rowToMaintenance(data);
 }
- 
+
 /* ============================================================
    SIMS TABLE
    A SIM is one physical card with two numbers:
@@ -219,7 +219,7 @@ async function updateMaintenanceRecord(record) {
      secondaryNumber - typically 19-20 digit ICCID printed on the card
    The secondary is the unique permanent identifier of the card.
    ============================================================ */
- 
+
 function rowToSim(row) {
   return {
     id: row.id,
@@ -230,7 +230,7 @@ function rowToSim(row) {
     updatedAt: row.updated_at,
   };
 }
- 
+
 function simToRow(sim) {
   return {
     primary_number: sim.primaryNumber ? String(sim.primaryNumber).trim() || null : null,
@@ -238,10 +238,10 @@ function simToRow(sim) {
     notes: sim.notes || null,
   };
 }
- 
+
 // Sentinel error so callers can detect "migration not yet run".
 const SIMS_TABLE_MISSING = "SIMS_TABLE_MISSING";
- 
+
 function isMissingSimsTableError(err) {
   if (!err) return false;
   const msg = (err.message || "").toLowerCase();
@@ -258,13 +258,13 @@ function isMissingSimsTableError(err) {
     (msg.includes("schema cache") && msg.includes("sims"))
   );
 }
- 
+
 async function fetchSims() {
   const { data, error } = await getDb()
     .from("sims")
     .select("*")
     .order("created_at", { ascending: false });
- 
+
   if (error) {
     if (isMissingSimsTableError(error)) {
       const e = new Error("sims table missing — database setup incomplete");
@@ -275,14 +275,14 @@ async function fetchSims() {
   }
   return (data || []).map(rowToSim);
 }
- 
+
 async function insertSim(sim) {
   const { data, error } = await getDb()
     .from("sims")
     .insert(simToRow(sim))
     .select()
     .single();
- 
+
   if (error) {
     if (isMissingSimsTableError(error)) {
       const e = new Error("sims table missing — database setup incomplete");
@@ -293,7 +293,7 @@ async function insertSim(sim) {
   }
   return rowToSim(data);
 }
- 
+
 async function updateSim(sim) {
   const { data, error } = await getDb()
     .from("sims")
@@ -306,17 +306,18 @@ async function updateSim(sim) {
     .eq("id", sim.id)
     .select()
     .single();
- 
+
   if (error) throw new Error(error.message);
   return rowToSim(data);
 }
- 
+
 async function deleteSim(simId) {
-  const { error } = await getDb().from("sims").delete().eq("id", simId);
+  const { data, error } = await getDb().from("sims").delete().eq("id", simId).select();
   if (error) throw new Error(error.message);
+  if (!data || data.length === 0) throw new Error("Delete had no effect. Row may not exist or permission denied. Contact administrator.");
   return true;
 }
- 
+
 // Upsert a SIM by secondary_number (the unique permanent identifier).
 // If the SIM exists, primary_number is updated (and notes if provided).
 // If not, a new row is inserted.
@@ -327,13 +328,13 @@ async function upsertSim({ primaryNumber, secondaryNumber, notes }) {
   };
   if (notes !== undefined) payload.notes = notes || null;
   payload.updated_at = new Date().toISOString();
- 
+
   const { data, error } = await getDb()
     .from("sims")
     .upsert(payload, { onConflict: "secondary_number" })
     .select()
     .single();
- 
+
   if (error) {
     if (isMissingSimsTableError(error)) {
       const e = new Error("sims table missing — database setup incomplete");
@@ -344,14 +345,14 @@ async function upsertSim({ primaryNumber, secondaryNumber, notes }) {
   }
   return rowToSim(data);
 }
- 
+
 /* ============================================================
    STOCK ITEMS TABLE
    Inventory: GPS devices, brackets, cables, sensors, antennas,
    batteries, tools, etc. Each item has quantity, unit, optional
    cost-per-unit, and optional low-stock threshold.
    ============================================================ */
- 
+
 function rowToStockItem(row) {
   return {
     id: row.id,
@@ -368,7 +369,7 @@ function rowToStockItem(row) {
     updatedAt: row.updated_at,
   };
 }
- 
+
 function stockItemToRow(item) {
   const num = (v) => (v === "" || v == null ? null : Number(v));
   return {
@@ -383,9 +384,9 @@ function stockItemToRow(item) {
     metadata: item.metadata && typeof item.metadata === "object" ? item.metadata : {},
   };
 }
- 
+
 const STOCK_ITEMS_TABLE_MISSING = "STOCK_ITEMS_TABLE_MISSING";
- 
+
 function isMissingStockItemsTableError(err) {
   if (!err) return false;
   const msg = (err.message || "").toLowerCase();
@@ -398,13 +399,13 @@ function isMissingStockItemsTableError(err) {
     (msg.includes("schema cache") && msg.includes("stock_items"))
   );
 }
- 
+
 async function fetchStockItems() {
   const { data, error } = await getDb()
     .from("stock_items")
     .select("*")
     .order("name", { ascending: true });
- 
+
   if (error) {
     if (isMissingStockItemsTableError(error)) {
       const e = new Error("stock_items table missing — database setup incomplete");
@@ -415,14 +416,14 @@ async function fetchStockItems() {
   }
   return (data || []).map(rowToStockItem);
 }
- 
+
 async function insertStockItem(item) {
   const { data, error } = await getDb()
     .from("stock_items")
     .insert(stockItemToRow(item))
     .select()
     .single();
- 
+
   if (error) {
     if (isMissingStockItemsTableError(error)) {
       const e = new Error("stock_items table missing — database setup incomplete");
@@ -433,7 +434,7 @@ async function insertStockItem(item) {
   }
   return rowToStockItem(data);
 }
- 
+
 async function updateStockItem(item) {
   const payload = stockItemToRow(item);
   payload.updated_at = new Date().toISOString();
@@ -446,20 +447,21 @@ async function updateStockItem(item) {
   if (error) throw new Error(error.message);
   return rowToStockItem(data);
 }
- 
+
 async function deleteStockItem(itemId) {
-  const { error } = await getDb().from("stock_items").delete().eq("id", itemId);
+  const { data, error } = await getDb().from("stock_items").delete().eq("id", itemId).select();
   if (error) throw new Error(error.message);
+  if (!data || data.length === 0) throw new Error("Delete had no effect. Row may not exist or permission denied. Contact administrator.");
   return true;
 }
- 
+
 /* ============================================================
    STOCK TRANSACTIONS TABLE
    Each stock adjustment is recorded here, optionally linked to
    an installation/vehicle so the Stock page can show "Used in
    VEHICLE-X" and a full per-item history.
    ============================================================ */
- 
+
 function rowToStockTx(row) {
   return {
     id: row.id,
@@ -475,9 +477,9 @@ function rowToStockTx(row) {
     createdAt: row.created_at,
   };
 }
- 
+
 const STOCK_TX_TABLE_MISSING = "STOCK_TX_TABLE_MISSING";
- 
+
 function isMissingStockTxTableError(err) {
   if (!err) return false;
   const msg = (err.message || "").toLowerCase();
@@ -490,14 +492,14 @@ function isMissingStockTxTableError(err) {
     (msg.includes("schema cache") && msg.includes("stock_transactions"))
   );
 }
- 
+
 async function fetchStockTransactions() {
   const { data, error } = await getDb()
     .from("stock_transactions")
     .select("*")
     .order("created_at", { ascending: false })
     .limit(2000);
- 
+
   if (error) {
     if (isMissingStockTxTableError(error)) {
       const e = new Error("stock_transactions table missing — database setup incomplete");
@@ -508,7 +510,7 @@ async function fetchStockTransactions() {
   }
   return (data || []).map(rowToStockTx);
 }
- 
+
 async function insertStockTransaction(tx) {
   const { data, error } = await getDb()
     .from("stock_transactions")
@@ -525,7 +527,7 @@ async function insertStockTransaction(tx) {
     })
     .select()
     .single();
- 
+
   if (error) {
     if (isMissingStockTxTableError(error)) {
       const e = new Error("stock_transactions table missing — database setup incomplete");
@@ -536,12 +538,12 @@ async function insertStockTransaction(tx) {
   }
   return rowToStockTx(data);
 }
- 
+
 /* ============================================================
    DELETION AUDIT LOG
    Immutable record of every destructive action (with reason).
    ============================================================ */
- 
+
 function rowToDeletionLog(row) {
   return {
     id: row.id,
@@ -554,9 +556,9 @@ function rowToDeletionLog(row) {
     deletedAt: row.deleted_at,
   };
 }
- 
+
 const DELETION_LOG_TABLE_MISSING = "DELETION_LOG_TABLE_MISSING";
- 
+
 function isMissingDeletionLogError(err) {
   if (!err) return false;
   const msg = (err.message || "").toLowerCase();
@@ -569,7 +571,7 @@ function isMissingDeletionLogError(err) {
     (msg.includes("schema cache") && msg.includes("deletion_log"))
   );
 }
- 
+
 async function fetchDeletionLog(limit = 200) {
   const { data, error } = await getDb()
     .from("deletion_log")
@@ -586,7 +588,7 @@ async function fetchDeletionLog(limit = 200) {
   }
   return (data || []).map(rowToDeletionLog);
 }
- 
+
 async function insertDeletionLog(entry) {
   const { error } = await getDb()
     .from("deletion_log")
@@ -609,18 +611,18 @@ async function insertDeletionLog(entry) {
   }
   return true;
 }
- 
+
 /* ============================================================
    SUPPLIERS TABLE
    Admin-managed list of suppliers used in the Stock page.
    ============================================================ */
- 
+
 function rowToSupplier(row) {
   return { id: row.id, name: row.name, createdAt: row.created_at };
 }
- 
+
 const SUPPLIERS_TABLE_MISSING = "SUPPLIERS_TABLE_MISSING";
- 
+
 function isMissingSuppliersTableError(err) {
   if (!err) return false;
   const msg = (err.message || "").toLowerCase();
@@ -633,7 +635,7 @@ function isMissingSuppliersTableError(err) {
     (msg.includes("schema cache") && msg.includes("suppliers"))
   );
 }
- 
+
 async function fetchSuppliers() {
   const { data, error } = await getDb()
     .from("suppliers")
@@ -649,7 +651,7 @@ async function fetchSuppliers() {
   }
   return (data || []).map(rowToSupplier);
 }
- 
+
 async function insertSupplier(name) {
   const trimmed = String(name).trim();
   if (!trimmed) throw new Error("Supplier name cannot be empty.");
@@ -666,42 +668,55 @@ async function insertSupplier(name) {
   }
   return rowToSupplier(data);
 }
- 
+
 async function deleteSupplier(id) {
-  const { error } = await getDb().from("suppliers").delete().eq("id", id);
+  const { data, error } = await getDb().from("suppliers").delete().eq("id", id).select();
   if (error) throw new Error(error.message);
+  if (!data || data.length === 0) throw new Error("Delete had no effect. Row may not exist or permission denied. Contact administrator.");
   return true;
 }
- 
+
 /* ============================================================
    INSTALLATION & MAINTENANCE DELETE
    Hard-delete an installation or repair entry. Auto-consume
    reversal is handled in app.js (consumeStockReverse).
    ============================================================ */
- 
+
 async function deleteInstallation(installationId) {
-  const { error } = await getDb()
+  const { data, error } = await getDb()
     .from("installations")
     .delete()
-    .eq("id", installationId);
+    .eq("id", installationId)
+    .select();
   if (error) throw new Error(error.message);
+  if (!data || data.length === 0) {
+    throw new Error(
+      "Delete had no effect. The row may not exist or your account does not have permission to delete from the installations table. Contact administrator to check database policies."
+    );
+  }
   return true;
 }
- 
+
 async function deleteMaintenanceRecord(recordId) {
-  const { error } = await getDb()
+  const { data, error } = await getDb()
     .from("maintenance_records")
     .delete()
-    .eq("id", recordId);
+    .eq("id", recordId)
+    .select();
   if (error) throw new Error(error.message);
+  if (!data || data.length === 0) {
+    throw new Error(
+      "Delete had no effect. Row may not exist or permission denied. Contact administrator."
+    );
+  }
   return true;
 }
- 
+
 /* ============================================================
    STOCK CATEGORIES TABLE
    Admin-managed list of categories used in the Stock page.
    ============================================================ */
- 
+
 function rowToCategory(row) {
   return {
     id: row.id,
@@ -709,9 +724,9 @@ function rowToCategory(row) {
     createdAt: row.created_at,
   };
 }
- 
+
 const STOCK_CATEGORIES_TABLE_MISSING = "STOCK_CATEGORIES_TABLE_MISSING";
- 
+
 function isMissingCategoriesTableError(err) {
   if (!err) return false;
   const msg = (err.message || "").toLowerCase();
@@ -724,7 +739,7 @@ function isMissingCategoriesTableError(err) {
     (msg.includes("schema cache") && msg.includes("stock_categories"))
   );
 }
- 
+
 async function fetchStockCategories() {
   const { data, error } = await getDb()
     .from("stock_categories")
@@ -740,7 +755,7 @@ async function fetchStockCategories() {
   }
   return (data || []).map(rowToCategory);
 }
- 
+
 async function insertStockCategory(name) {
   const trimmed = String(name).trim();
   if (!trimmed) throw new Error("Category name cannot be empty.");
@@ -758,13 +773,14 @@ async function insertStockCategory(name) {
   }
   return rowToCategory(data);
 }
- 
+
 async function deleteStockCategory(id) {
-  const { error } = await getDb().from("stock_categories").delete().eq("id", id);
+  const { data, error } = await getDb().from("stock_categories").delete().eq("id", id).select();
   if (error) throw new Error(error.message);
+  if (!data || data.length === 0) throw new Error("Delete had no effect. Row may not exist or permission denied. Contact administrator.");
   return true;
 }
- 
+
 // Realtime subscription. onChange(eventType, payload):
 //   eventType = 'status' : connection status changes
 //   eventType = 'data'   : a row changed in any subscribed table
@@ -815,7 +831,7 @@ function subscribeRealtime(onChange) {
     .subscribe((status) => onChange("status", { status }));
   return channel;
 }
- 
+
 async function unsubscribeRealtime(channel) {
   if (!channel) return;
   try {
@@ -824,11 +840,11 @@ async function unsubscribeRealtime(channel) {
     // ignore
   }
 }
- 
+
 // ============================================================
 // ACCOUNTS MODULE (v3.0)
 // ============================================================
- 
+
 // ----- Projects -----
 async function fetchAccountsProjects() {
   const { data, error } = await getDb()
@@ -843,7 +859,7 @@ async function fetchAccountsProjects() {
     createdBy: row.created_by,
   }));
 }
- 
+
 async function insertAccountsProject(project) {
   const row = {
     id: project.id,
@@ -863,12 +879,13 @@ async function insertAccountsProject(project) {
     createdBy: data.created_by,
   };
 }
- 
+
 async function deleteAccountsProject(id) {
-  const { error } = await getDb().from("accounts_projects").delete().eq("id", id);
+  const { data, error } = await getDb().from("accounts_projects").delete().eq("id", id).select();
   if (error) throw error;
+  if (!data || data.length === 0) throw new Error("Delete had no effect. Permission denied or row missing.");
 }
- 
+
 // ----- Transactions -----
 async function fetchAccountsTransactions() {
   const { data, error } = await getDb()
@@ -891,7 +908,7 @@ async function fetchAccountsTransactions() {
     createdBy: row.created_by,
   }));
 }
- 
+
 async function insertAccountsTransaction(tx) {
   const row = {
     id: tx.id,
@@ -923,7 +940,7 @@ async function insertAccountsTransaction(tx) {
     createdBy: data.created_by,
   };
 }
- 
+
 async function updateAccountsTransaction(id, patch) {
   const row = {};
   if ("type" in patch) row.type = patch.type;
@@ -942,16 +959,17 @@ async function updateAccountsTransaction(id, patch) {
   if (error) throw error;
   return data;
 }
- 
+
 async function deleteAccountsTransaction(id) {
-  const { error } = await getDb().from("accounts_transactions").delete().eq("id", id);
+  const { data, error } = await getDb().from("accounts_transactions").delete().eq("id", id).select();
   if (error) throw error;
+  if (!data || data.length === 0) throw new Error("Delete had no effect. Permission denied or row missing.");
 }
- 
+
 // ============================================================
 // USER PERMISSIONS (v3.1)
 // ============================================================
- 
+
 async function fetchUserPermissions() {
   const { data, error } = await getDb()
     .from("user_permissions")
@@ -966,7 +984,7 @@ async function fetchUserPermissions() {
     updatedBy: row.updated_by,
   }));
 }
- 
+
 async function upsertUserPermission(p) {
   const row = {
     username: p.username,
@@ -981,15 +999,117 @@ async function upsertUserPermission(p) {
     .upsert(row, { onConflict: "username" });
   if (error) throw error;
 }
- 
 
+/* ============================================================
+   RENEWALS TABLE (v3.8.0)
+   SIM subscription renewal tracking — 365-day cycle
+   ============================================================ */
 
+function rowToRenewal(row) {
+  return {
+    id: row.id,
+    plateNumber: row.plate_number || "",
+    vehicleName: row.vehicle_name || "",
+    company: row.company || "",
+    branch: row.branch || "",
+    reseller: row.reseller || "",
+    imei: row.imei || "",
+    simNumber: row.sim_number || "",
+    simProvider: row.sim_provider || "",
+    secondarySim: row.secondary_sim || "",
+    secondarySimProvider: row.secondary_sim_provider || "",
+    gpsDeviceType: row.gps_device_type || "",
+    createdDate: row.created_date,
+    payments: row.payments || [],
+    lastUploadedAt: row.last_uploaded_at,
+    lastUploadedBy: row.last_uploaded_by,
+    notes: row.notes || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
 
+function renewalToRow(r) {
+  return {
+    plate_number: r.plateNumber || "",
+    vehicle_name: r.vehicleName || null,
+    company: r.company || null,
+    branch: r.branch || null,
+    reseller: r.reseller || null,
+    imei: r.imei || "",
+    sim_number: r.simNumber || null,
+    sim_provider: r.simProvider || null,
+    secondary_sim: r.secondarySim || null,
+    secondary_sim_provider: r.secondarySimProvider || null,
+    gps_device_type: r.gpsDeviceType || null,
+    created_date: r.createdDate,
+    payments: r.payments || [],
+    last_uploaded_at: r.lastUploadedAt || null,
+    last_uploaded_by: r.lastUploadedBy || null,
+    notes: r.notes || null,
+  };
+}
 
+async function fetchRenewals() {
+  const { data, error } = await getDb()
+    .from("renewals")
+    .select("*")
+    .order("created_date", { ascending: false })
+    .limit(5000);
+  if (error) throw new Error(error.message);
+  return (data || []).map(rowToRenewal);
+}
 
+async function upsertRenewal(renewal) {
+  const row = renewalToRow(renewal);
+  if (renewal.id) row.id = renewal.id;
+  const { data, error } = await getDb()
+    .from("renewals")
+    .upsert(row, { onConflict: "imei" })
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return rowToRenewal(data);
+}
 
+/**
+ * Bulk upsert — merge by IMEI.
+ * - If IMEI exists: update plate/vehicle/company/sim data, KEEP payments & notes.
+ * - If IMEI new: insert fresh row.
+ * - Rows in DB but not in file: untouched.
+ */
+async function bulkUpsertRenewals(renewals) {
+  if (!renewals || renewals.length === 0) return { inserted: 0, updated: 0, errors: [] };
+  const rows = renewals.map(renewalToRow);
+  // Supabase upsert supports arrays. Returning only inserted/updated via .select().
+  const { data, error } = await getDb()
+    .from("renewals")
+    .upsert(rows, { onConflict: "imei" })
+    .select();
+  if (error) throw new Error(error.message);
+  return { count: (data || []).length, data: (data || []).map(rowToRenewal) };
+}
 
+async function updateRenewalPayments(id, payments) {
+  const { data, error } = await getDb()
+    .from("renewals")
+    .update({ payments: payments })
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return rowToRenewal(data);
+}
 
-
-
-
+async function deleteRenewal(id) {
+  const { data, error } = await getDb()
+    .from("renewals")
+    .delete()
+    .eq("id", id)
+    .select();
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) {
+    throw new Error("Delete had no effect. Permission denied or row missing.");
+  }
+  return true;
+}

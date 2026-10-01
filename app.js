@@ -5,19 +5,21 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.6.10";
+const APP_VERSION = "3.8.0";
 
 const USERS = {
-  akash:   { password: "akash",     role: "akash" },
-  admin:   { password: "password1", role: "admin" },
-  abhinav: { password: "abhinav",   role: "stock-manager" },
+  akash:     { password: "akash",     role: "akash" },
+  admin:     { password: "password1", role: "admin" },
+  abhinav:   { password: "abhinav",   role: "stock-manager" },
+  collector: { password: "collector", role: "collector" },
 };
 
 // Default page permissions (used as fallback when DB doesn't have a row)
 const DEFAULT_PERMISSIONS = {
-  admin:   { displayName: "Admin",                   isAdmin: true,  allowedPages: ["dashboard","installations","repairs","pending","sim-db","stock","accounts","timeline","deletions","user-access"] },
-  akash:   { displayName: "Akash (Field Worker)",    isAdmin: false, allowedPages: ["akash-home","akash-deleted","install","repair"] },
-  abhinav: { displayName: "Abhinav (Stock Manager)", isAdmin: false, allowedPages: ["stock"] },
+  admin:     { displayName: "Admin",                   isAdmin: true,  allowedPages: ["dashboard","installations","repairs","pending","sim-db","stock","accounts","renewals","timeline","deletions","user-access"] },
+  akash:     { displayName: "Akash (Field Worker)",    isAdmin: false, allowedPages: ["akash-home","akash-deleted","install","repair"] },
+  abhinav:   { displayName: "Abhinav (Stock Manager)", isAdmin: false, allowedPages: ["stock"] },
+  collector: { displayName: "Collector (Renewals)",    isAdmin: false, allowedPages: ["renewals"] },
 };
 
 // Loaded from DB on app init; falls back to DEFAULT_PERMISSIONS
@@ -76,6 +78,12 @@ let suppliers = [];
 let deletionLog = [];
 let accountsProjects = [];
 let accountsTransactions = [];
+let renewals = [];
+let renewalsTableReady = true;
+let renewalsQuery = "";
+let renewalsCompanyFilter = "all";
+let renewalsStatusFilter = "all";  // all | expired | urgent | soon | upcoming | active | paid
+let renewalsYearFilter = "all";
 let simsTableReady = true;
 let stockItemsTableReady = true;
 let stockTxTableReady = true;
@@ -1114,6 +1122,15 @@ async function refreshAllData() {
     } catch (err) {
       console.warn("accounts_transactions table missing or unreadable", err?.message || err);
       accountsTransactions = [];
+    }
+    // Renewals — soft-fail if migration not yet run
+    try {
+      renewals = await withTimeout(fetchRenewals(), 20000, "Fetch renewals");
+      renewalsTableReady = true;
+    } catch (err) {
+      console.warn("renewals table missing — run renewals-migration.sql", err?.message || err);
+      renewals = [];
+      renewalsTableReady = false;
     }
     // User permissions — soft-fail to default if migration not run
     try {
@@ -2502,6 +2519,180 @@ function withBusyButton(fn, { busyText = "Saving…" } = {}) {
   };
 }
 
+/**
+ * v3.7.0 — Grouped pending tasks section for Installations page.
+ * Shows a collapsible card per task type, listing all installs with that
+ * task still pending. Admin can act on the task directly from here.
+ */
+let _pendingTasksExpanded = {}; // taskType -> bool
+
+function renderPendingTasksGroups(allInstalls) {
+  // Build map: taskType -> array of installs that have this task pending
+  const groups = {};
+  for (const inst of allInstalls) {
+    for (const type of INSTALL_TASK_TYPES) {
+      const t = inst.tasks?.[type];
+      if (!t || !t.completedAt) {
+        if (!groups[type]) groups[type] = [];
+        groups[type].push(inst);
+      }
+    }
+  }
+
+  const typesWithPending = INSTALL_TASK_TYPES.filter((t) => (groups[t] || []).length > 0);
+  if (typesWithPending.length === 0) {
+    return `
+      <section class="card pending-tasks-card">
+        <div class="all-done-banner">
+          <span class="all-done-icon">✅</span>
+          <div>
+            <h3>All installation tasks completed!</h3>
+            <p>Har vehicle ke saare portal / vehicle-number tasks done ho gaye.</p>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="card pending-tasks-card">
+      <div class="section-heading">
+        <div>
+          <h2>📋 Pending Tasks by Type</h2>
+          <p class="section-subtitle">Har type ke pending tasks group me. Click karke expand karo aur ek jagah se sab handle karo.</p>
+        </div>
+      </div>
+      <div class="pending-groups">
+        ${typesWithPending.map((type) => {
+          const meta = TASK_TYPES[type];
+          const list = groups[type];
+          const isExpanded = _pendingTasksExpanded[type];
+          return `
+            <div class="pending-group ${isExpanded ? 'expanded' : ''}">
+              <button type="button" class="pending-group-header" data-toggle-task="${escapeHtml(type)}">
+                <span class="pg-icon">${meta.icon}</span>
+                <span class="pg-label">${escapeHtml(meta.label)}</span>
+                <span class="pg-count">${list.length}</span>
+                <span class="pg-arrow">${isExpanded ? '▼' : '▶'}</span>
+              </button>
+              ${isExpanded ? `
+                <div class="pending-group-body">
+                  <div class="pending-list">
+                    ${list.slice(0, 50).map((inst) => `
+                      <div class="pending-row">
+                        <div class="pending-row-main">
+                          <span class="pr-vehicle">${escapeHtml(inst.vehicleNo)}</span>
+                          <span class="pr-imei mono">IMEI: ${escapeHtml(getCurrentImei(inst) || '—')}</span>
+                        </div>
+                        <div class="pending-row-actions">
+                          <button type="button" class="btn btn-primary btn-xs pending-mark-done" data-install-id="${escapeHtml(inst.id)}" data-task-type="${escapeHtml(type)}">✓ Done</button>
+                        </div>
+                      </div>
+                    `).join('')}
+                    ${list.length > 50 ? `<div class="pending-more">...and ${list.length - 50} more (showing first 50)</div>` : ''}
+                  </div>
+                </div>
+              ` : ''}
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function bindPendingTaskHandlers() {
+  document.querySelectorAll('[data-toggle-task]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const type = btn.dataset.toggleTask;
+      _pendingTasksExpanded[type] = !_pendingTasksExpanded[type];
+      render();
+    });
+  });
+  document.querySelectorAll('.pending-mark-done').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      await runWithBusyButton(btn, async () => {
+        const installId = btn.dataset.installId;
+        const taskType = btn.dataset.taskType;
+        const inst = installations.find((i) => i.id === installId);
+        if (!inst) { showToast("Installation not found.", true); return; }
+        const now = new Date().toISOString();
+        const newTasks = { ...(inst.tasks || {}) };
+        newTasks[taskType] = { completedAt: now, completedBy: currentUser?.username || "admin" };
+        try {
+          const updated = { ...inst, tasks: newTasks };
+          await updateInstallation(updated);
+          const idx = installations.findIndex((i) => i.id === installId);
+          if (idx >= 0) installations[idx] = updated;
+          showToast(`✓ Task marked complete for ${inst.vehicleNo}`);
+          render();
+        } catch (err) {
+          showToast(err.message || "Failed to mark task complete.", true);
+        }
+      }, "Marking…");
+    });
+  });
+}
+
+function renderPendingTasksGroups_bindHelper() { bindPendingTaskHandlers(); }
+
+/* ============================================================
+   Universal sortable table system (v3.7.0)
+   Usage:
+     1. In your <th>: renderSortHeader("Vehicle", "vehicleNo", "installsTable")
+     2. Before mapping rows: sortRows(rows, "installsTable", accessors)
+   accessors = { vehicleNo: r => r.vehicleNo, imei: r => getCurrentImei(r), ... }
+   ============================================================ */
+const tableSortState = {}; // { tableKey: { column, direction: "asc"|"desc" } }
+
+function renderSortHeader(label, columnKey, tableKey) {
+  const st = tableSortState[tableKey];
+  const isActive = st && st.column === columnKey;
+  const arrow = isActive ? (st.direction === "asc" ? " ▲" : " ▼") : "";
+  const activeClass = isActive ? " sortable-th-active" : "";
+  return `<th class="sortable-th${activeClass}" data-sort-table="${escapeHtml(tableKey)}" data-sort-column="${escapeHtml(columnKey)}">${label}${arrow}</th>`;
+}
+
+function sortRows(rows, tableKey, accessors) {
+  const st = tableSortState[tableKey];
+  if (!st || !st.column || !accessors[st.column]) return rows;
+  const fn = accessors[st.column];
+  const sorted = [...rows].sort((a, b) => {
+    const va = fn(a);
+    const vb = fn(b);
+    // Handle null/undefined
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    // Number vs string
+    if (typeof va === "number" && typeof vb === "number") return va - vb;
+    if (va instanceof Date && vb instanceof Date) return va.getTime() - vb.getTime();
+    return String(va).localeCompare(String(vb), undefined, { numeric: true, sensitivity: "base" });
+  });
+  if (st.direction === "desc") sorted.reverse();
+  return sorted;
+}
+
+// Global click handler for sort headers (delegated)
+document.addEventListener("click", (e) => {
+  const th = e.target.closest && e.target.closest(".sortable-th");
+  if (!th) return;
+  const tableKey = th.dataset.sortTable;
+  const column = th.dataset.sortColumn;
+  if (!tableKey || !column) return;
+  const st = tableSortState[tableKey] || {};
+  if (st.column === column) {
+    // Same column — toggle direction, or clear if desc
+    if (st.direction === "asc") st.direction = "desc";
+    else { tableSortState[tableKey] = {}; render(); return; }
+  } else {
+    st.column = column;
+    st.direction = "asc";
+  }
+  tableSortState[tableKey] = st;
+  render();
+});
+
 function showToast(message, isError = false) {
   toast.textContent = message;
   toast.classList.toggle("error", isError);
@@ -2815,7 +3006,7 @@ function renderLogin() {
         <form id="loginForm">
           <div class="field">
             <label for="loginUser">Username</label>
-            <input type="text" id="loginUser" required placeholder="akash or admin" autocomplete="username" />
+            <input type="text" id="loginUser" required placeholder="akash, admin, abhinav, or collector" autocomplete="username" />
           </div>
           <div class="field">
             <label for="loginPass">Password</label>
@@ -5896,6 +6087,7 @@ const ADMIN_NAV = [
   { key: "sim-db",        view: "sim-db",        icon: "≣", label: "SIMs",      labelLong: "SIM Database" },
   { key: "stock",         view: "stock",         icon: "▦", label: "Stock",     labelLong: "Stock" },
   { key: "accounts",      view: "accounts",      icon: "₹", label: "Accounts",  labelLong: "Accounts" },
+  { key: "renewals",      view: "renewals",      icon: "📅", label: "Renewals", labelLong: "Renewal Tracker" },
 ];
 
 // Returns nav items the current user can access
@@ -6610,7 +6802,7 @@ function renderInstallationsPage() {
   const allInstalls = loadInstallations();
   const q = searchQuery.toLowerCase().trim();
   const tokens = q.split(/\s+/).filter(Boolean);
-  const filtered = allInstalls.filter((i) => {
+  let filtered = allInstalls.filter((i) => {
     if (!q) return true;
     const hay = [
       i.vehicleNo,
@@ -6625,6 +6817,19 @@ function renderInstallationsPage() {
       .join(" ")
       .toLowerCase();
     return tokens.every((t) => hay.includes(t));
+  });
+
+  // Column-header sort
+  filtered = sortRows(filtered, "installs", {
+    imei: (i) => getCurrentImei(i),
+    gpsModel: (i) => i.gpsModel,
+    vehicleNo: (i) => i.vehicleNo,
+    secondary: (i) => i.secondarySim || "",
+    primary: (i) => resolvePrimarySim(getCurrentSim(i)) || getCurrentSim(i),
+    sensorNo: (i) => i.sensorNo,
+    macId: (i) => i.macId,
+    liveStatus: (i) => getInstallLiveStatus(i),
+    date: (i) => new Date(i.createdAt),
   });
 
   // Stats for the colorful strip
@@ -6647,6 +6852,9 @@ function renderInstallationsPage() {
         <div class="summary-box summary-warn"><strong>${unknownCount}</strong><span>⚪ Unknown</span></div>
         <div class="summary-box summary-purple"><strong>${recentInstalls}</strong><span>This week</span></div>
       </div>
+
+      ${renderPendingTasksGroups(allInstalls)}
+
       <section class="card">
         <div class="section-heading">
           <div>
@@ -6676,15 +6884,15 @@ function renderInstallationsPage() {
         <div class="table-wrap installs-table-desktop">
           <table>
             <thead><tr>
-              <th>IMEI</th>
-              <th>GPS Model</th>
-              <th>Vehicle</th>
-              <th>Secondary No (ICCID)</th>
-              <th>Primary No (Mobile)</th>
-              <th>Sensor No</th>
-              <th>MAC ID</th>
-              <th>Status</th>
-              <th>Date</th>
+              ${renderSortHeader("IMEI", "imei", "installs")}
+              ${renderSortHeader("GPS Model", "gpsModel", "installs")}
+              ${renderSortHeader("Vehicle", "vehicleNo", "installs")}
+              ${renderSortHeader("Secondary No (ICCID)", "secondary", "installs")}
+              ${renderSortHeader("Primary No (Mobile)", "primary", "installs")}
+              ${renderSortHeader("Sensor No", "sensorNo", "installs")}
+              ${renderSortHeader("MAC ID", "macId", "installs")}
+              ${renderSortHeader("Status", "liveStatus", "installs")}
+              ${renderSortHeader("Date", "date", "installs")}
               <th>Actions</th>
             </tr></thead>
             <tbody>
@@ -6832,6 +7040,7 @@ function renderInstallationsPage() {
   `;
   bindLogout();
   bindAdminNav();
+  bindPendingTaskHandlers();
   document.getElementById("adminSearch")?.addEventListener("input", (e) => {
     searchQuery = e.target.value;
     render();
@@ -6877,7 +7086,7 @@ function renderRepairsPage() {
   const allMaint = loadMaintenance();
   const q = searchQuery.toLowerCase().trim();
   const tokens = q.split(/\s+/).filter(Boolean);
-  const filtered = allMaint.filter((m) => {
+  let filtered = allMaint.filter((m) => {
     if (!q) return true;
     const hay = [
       m.imei,
@@ -6892,6 +7101,15 @@ function renderRepairsPage() {
       .join(" ")
       .toLowerCase();
     return tokens.every((t) => hay.includes(t));
+  });
+
+  // Column-header sort
+  filtered = sortRows(filtered, "repairs", {
+    date: (m) => new Date(m.createdAt),
+    vehicleNo: (m) => m.vehicleNo || "",
+    imei: (m) => m.imei || "",
+    work: (m) => workLabels(m),
+    status: (m) => m.status || "",
   });
 
   // Stats: total / sim changes / device changes / this week
@@ -6939,7 +7157,13 @@ function renderRepairsPage() {
         </div>
         <div class="table-wrap repairs-table-desktop">
           <table>
-            <thead><tr><th>Date</th><th>Vehicle</th><th>IMEI</th><th>Work Done</th><th>Status</th></tr></thead>
+            <thead><tr>
+              ${renderSortHeader("Date", "date", "repairs")}
+              ${renderSortHeader("Vehicle", "vehicleNo", "repairs")}
+              ${renderSortHeader("IMEI", "imei", "repairs")}
+              ${renderSortHeader("Work Done", "work", "repairs")}
+              ${renderSortHeader("Status", "status", "repairs")}
+            </tr></thead>
             <tbody>
               ${
                 filtered.length
@@ -9030,13 +9254,24 @@ function renderStockPage() {
     </div>
   ` : "";
 
-  // Sort: low-stock first, then by name
-  filtered.sort((a, b) => {
-    const la = isLow(a) ? 0 : 1;
-    const lb = isLow(b) ? 0 : 1;
-    if (la !== lb) return la - lb;
-    return a.name.localeCompare(b.name);
-  });
+  // Sort: user column sort takes precedence, otherwise low-stock first + by name
+  if (tableSortState["stock"] && tableSortState["stock"].column) {
+    filtered = sortRows(filtered, "stock", {
+      name: (i) => i.name,
+      category: (i) => i.category || "",
+      supplier: (i) => i.supplier || "",
+      quantity: (i) => Number(i.quantity) || 0,
+      unit: (i) => i.unit || "",
+      updatedAt: (i) => new Date(i.updatedAt || i.createdAt),
+    });
+  } else {
+    filtered.sort((a, b) => {
+      const la = isLow(a) ? 0 : 1;
+      const lb = isLow(b) ? 0 : 1;
+      if (la !== lb) return la - lb;
+      return a.name.localeCompare(b.name);
+    });
+  }
 
   const fmtMoney = (n) =>
     n == null ? "—" : "₹" + Number(n).toLocaleString("en-IN", { maximumFractionDigits: 2 });
@@ -9115,13 +9350,13 @@ function renderStockPage() {
           <table>
             <thead>
               <tr>
-                <th>Item</th>
-                <th>Category</th>
-                <th>Supplier</th>
-                <th class="num-th">Qty</th>
-                <th>Unit</th>
+                ${renderSortHeader("Item", "name", "stock")}
+                ${renderSortHeader("Category", "category", "stock")}
+                ${renderSortHeader("Supplier", "supplier", "stock")}
+                ${renderSortHeader("Qty", "quantity", "stock")}
+                ${renderSortHeader("Unit", "unit", "stock")}
                 <th>Recent use</th>
-                <th>Last updated</th>
+                ${renderSortHeader("Last updated", "updatedAt", "stock")}
                 <th></th>
               </tr>
             </thead>
@@ -10253,6 +10488,9 @@ function render() {
       break;
     case "accounts":
       renderAccountsPage();
+      break;
+    case "renewals":
+      renderRenewalsPage();
       break;
     case "user-access":
       renderUserAccessPage();
@@ -12066,20 +12304,856 @@ async function initApp() {
     };
     document.addEventListener("click", prewarmHandler, { once: true, passive: true });
   } catch (err) {
-    app.innerHTML = `
-      ${renderHeader("GPS Maintenance Tracker", "Error")}
-      <main class="main centered">
-        <section class="card login-card"><h2>Could not start app</h2><p class="login-desc">${escapeHtml(err.message)}</p></section>
-      </main>
-    `;
+    const isOffline = !navigator.onLine;
+    const errMsg = String(err?.message || "").toLowerCase();
+    // Classify the failure type
+    const isNetworkError =
+      isOffline ||
+      errMsg.includes("backend sdk") ||
+      errMsg.includes("failed to load") ||
+      errMsg.includes("network") ||
+      errMsg.includes("fetch") ||
+      errMsg.includes("timeout") ||
+      errMsg.includes("cdn");
+
+    if (isNetworkError) {
+      app.innerHTML = `
+        ${renderHeader("GPS Maintenance Tracker", "Network issue")}
+        <main class="main centered">
+          <section class="card login-card offline-card">
+            <div class="offline-icon">📡❌</div>
+            <h2>Not connected to network</h2>
+            <p class="login-desc">
+              App start karne ke liye internet zaroori hai.<br>
+              Please apna WiFi ya mobile data check karo.
+            </p>
+            <div class="offline-checklist">
+              <div class="check-item">📶 Mobile data / WiFi ON hai?</div>
+              <div class="check-item">🌐 Any other website open ho raha?</div>
+              <div class="check-item">🚫 Firewall / VPN toh nahi hai on?</div>
+            </div>
+            <button type="button" class="btn btn-primary btn-block" id="retryBtn">🔄 Retry</button>
+            <p class="offline-hint">Ye page automatic reload hogi jab connection wapas aayega.</p>
+          </section>
+        </main>
+      `;
+      // Auto-retry when connection comes back
+      const retry = () => window.location.reload();
+      document.getElementById("retryBtn")?.addEventListener("click", retry);
+      window.addEventListener("online", retry, { once: true });
+    } else {
+      // Non-network error — show technical message
+      app.innerHTML = `
+        ${renderHeader("GPS Maintenance Tracker", "Error")}
+        <main class="main centered">
+          <section class="card login-card">
+            <h2>Could not start app</h2>
+            <p class="login-desc">${escapeHtml(err.message)}</p>
+            <button type="button" class="btn btn-primary btn-block" onclick="window.location.reload()">🔄 Retry</button>
+          </section>
+        </main>
+      `;
+    }
   }
 }
 
+/* ============================================================
+   v3.8.0 — RENEWAL TRACKER PAGE
+   SIM subscription renewals with 365-day cycle, payment collection,
+   bulk Excel upload, and alert tiers.
+   ============================================================ */
+
+const MS_PER_DAY = 1000 * 60 * 60 * 24;
+const RENEWAL_CYCLE_DAYS = 365;
+
+/**
+ * Calculate renewal status for a vehicle.
+ * Returns: {currentYear, nextExpiryDate, daysUntilExpiry, status, paidYears}
+ *   status: "paid" | "active" | "upcoming" | "soon" | "urgent" | "expired"
+ */
+function computeRenewalStatus(renewal, today = new Date()) {
+  const created = new Date(renewal.createdDate);
+  if (isNaN(created.getTime())) {
+    return { currentYear: 0, status: "unknown", daysUntilExpiry: null, nextExpiryDate: null, paidYears: [] };
+  }
+  // Normalise to midnight
+  created.setHours(0, 0, 0, 0);
+  const now = new Date(today);
+  now.setHours(0, 0, 0, 0);
+
+  const daysElapsed = Math.floor((now - created) / MS_PER_DAY);
+  // Current year = which 365-day block we are in (1-indexed)
+  const currentYear = Math.floor(daysElapsed / RENEWAL_CYCLE_DAYS) + 1;
+
+  // Next expiry = created + (currentYear * 365) days
+  const nextExpiryDate = new Date(created);
+  nextExpiryDate.setDate(nextExpiryDate.getDate() + currentYear * RENEWAL_CYCLE_DAYS);
+
+  const daysUntilExpiry = Math.ceil((nextExpiryDate - now) / MS_PER_DAY);
+
+  // Which years have been paid?
+  const paidYears = (renewal.payments || []).map((p) => p.year).filter((y) => y != null);
+  const isCurrentYearPaid = paidYears.includes(currentYear);
+
+  let status;
+  if (isCurrentYearPaid) status = "paid";
+  else if (daysUntilExpiry < 0) status = "expired";
+  else if (daysUntilExpiry <= 7) status = "urgent";
+  else if (daysUntilExpiry <= 15) status = "soon";
+  else if (daysUntilExpiry <= 30) status = "upcoming";
+  else status = "active";
+
+  return {
+    currentYear,
+    nextExpiryDate,
+    daysUntilExpiry,
+    status,
+    paidYears,
+    isCurrentYearPaid,
+    daysElapsed,
+  };
+}
+
+function renewalStatusMeta(status) {
+  const metas = {
+    expired:  { icon: "🔴", label: "EXPIRED",       pillClass: "status-expired",  priority: 1 },
+    urgent:   { icon: "🚨", label: "Urgent (≤7d)",  pillClass: "status-urgent",   priority: 2 },
+    soon:     { icon: "⚠️⚠️", label: "Soon (≤15d)", pillClass: "status-soon",    priority: 3 },
+    upcoming: { icon: "⚠️", label: "Upcoming (≤30d)",pillClass: "status-upcoming",priority: 4 },
+    active:   { icon: "🟢", label: "Active",        pillClass: "status-active",   priority: 5 },
+    paid:     { icon: "✅", label: "Paid",          pillClass: "status-paid",     priority: 6 },
+    unknown:  { icon: "❓", label: "Unknown",       pillClass: "status-unknown",  priority: 7 },
+  };
+  return metas[status] || metas.unknown;
+}
+
+function formatYMD(d) {
+  if (!d) return "";
+  const dt = (d instanceof Date) ? d : new Date(d);
+  if (isNaN(dt.getTime())) return "";
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+function formatDateIndian(d) {
+  if (!d) return "—";
+  const dt = (d instanceof Date) ? d : new Date(d);
+  if (isNaN(dt.getTime())) return "—";
+  return dt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function totalCollected(renewals) {
+  let total = 0;
+  for (const r of renewals) {
+    for (const p of (r.payments || [])) {
+      total += Number(p.amount) || 0;
+    }
+  }
+  return total;
+}
+
+function renderRenewalsPage() {
+  if (!renewalsTableReady) {
+    app.innerHTML = `
+      ${renderHeader("Renewal Tracker", "Setup required")}
+      <main class="main">
+        ${renderAdminNav("renewals")}
+        <section class="card">
+          <h2>⚠️ Database setup needed</h2>
+          <p>The <code>renewals</code> table doesn't exist yet. Admin ko ye SQL migration Supabase SQL Editor me run karni hai:</p>
+          <p style="margin-top: 0.5rem;"><strong>File:</strong> <code>renewals-migration.sql</code></p>
+          <p style="margin-top: 0.5rem; color: #64748b;">Fir page refresh karo.</p>
+        </section>
+      </main>
+    `;
+    bindAdminNav();
+    bindLogout();
+    return;
+  }
+
+  const today = new Date();
+  // Decorate each renewal with status
+  const decorated = renewals.map((r) => ({
+    renewal: r,
+    status: computeRenewalStatus(r, today),
+  }));
+
+  // Stats
+  const stats = {
+    total: decorated.length,
+    expired: decorated.filter((d) => d.status.status === "expired").length,
+    urgent: decorated.filter((d) => d.status.status === "urgent").length,
+    soon: decorated.filter((d) => d.status.status === "soon").length,
+    upcoming: decorated.filter((d) => d.status.status === "upcoming").length,
+    active: decorated.filter((d) => d.status.status === "active").length,
+    paid: decorated.filter((d) => d.status.status === "paid").length,
+  };
+  const totalReceived = totalCollected(renewals);
+
+  // Companies for filter
+  const companySet = new Set();
+  renewals.forEach((r) => { if (r.company) companySet.add(r.company); });
+  const companies = Array.from(companySet).sort();
+
+  // Apply filters
+  let filtered = decorated;
+  if (renewalsCompanyFilter !== "all") {
+    filtered = filtered.filter((d) => d.renewal.company === renewalsCompanyFilter);
+  }
+  if (renewalsStatusFilter !== "all") {
+    filtered = filtered.filter((d) => d.status.status === renewalsStatusFilter);
+  }
+  if (renewalsYearFilter !== "all") {
+    const y = parseInt(renewalsYearFilter, 10);
+    filtered = filtered.filter((d) => d.status.currentYear === y);
+  }
+  if (renewalsQuery) {
+    const q = renewalsQuery.toLowerCase();
+    filtered = filtered.filter((d) => {
+      const r = d.renewal;
+      const hay = `${r.plateNumber} ${r.vehicleName} ${r.company} ${r.imei} ${r.simNumber} ${r.simProvider} ${r.branch}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
+  // Sort by priority then by daysUntilExpiry
+  filtered.sort((a, b) => {
+    const pa = renewalStatusMeta(a.status.status).priority;
+    const pb = renewalStatusMeta(b.status.status).priority;
+    if (pa !== pb) return pa - pb;
+    const da = a.status.daysUntilExpiry ?? 99999;
+    const db = b.status.daysUntilExpiry ?? 99999;
+    return da - db;
+  });
+
+  const perms = getUserPerms(currentUser);
+  const isAdmin = perms?.isAdmin;
+  const isCollector = currentUser === "collector" || perms?.allowedPages?.includes("renewals");
+
+  // For collector-only view, we want a cleaner header
+  const headerSubtitle = `Track SIM subscription renewals · ${stats.total} vehicles`;
+
+  app.innerHTML = `
+    ${renderHeader("Renewal Tracker", headerSubtitle)}
+    <main class="main">
+      ${isAdmin ? renderAdminNav("renewals") : ""}
+
+      <div class="summary-grid renewal-stats">
+        <div class="summary-box"><strong>${stats.total}</strong><span>Total</span></div>
+        <div class="summary-box summary-danger"><strong>${stats.expired}</strong><span>🔴 Expired</span></div>
+        <div class="summary-box summary-warn"><strong>${stats.urgent}</strong><span>🚨 Urgent (≤7d)</span></div>
+        <div class="summary-box summary-warn"><strong>${stats.soon}</strong><span>⚠️⚠️ Soon (≤15d)</span></div>
+        <div class="summary-box"><strong>${stats.upcoming}</strong><span>⚠️ Upcoming (≤30d)</span></div>
+        <div class="summary-box summary-ok"><strong>${stats.active}</strong><span>🟢 Active</span></div>
+        <div class="summary-box summary-purple"><strong>${stats.paid}</strong><span>✅ Paid (current)</span></div>
+        <div class="summary-box summary-info"><strong>₹${totalReceived.toLocaleString("en-IN")}</strong><span>💰 Collected</span></div>
+      </div>
+
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <h2>Renewals ${filtered.length !== decorated.length
+              ? `<span class="filter-count">(${filtered.length} of ${decorated.length})</span>`
+              : `(${decorated.length})`}</h2>
+            <p class="section-subtitle">SIM subscription cycle = 365 days from Created Date. Mark payment when collected.</p>
+          </div>
+          <div class="bulk-actions">
+            <button type="button" class="btn btn-outline btn-sm" id="renewalExportBtn">↓ Export Excel</button>
+            <button type="button" class="btn btn-primary btn-sm" id="renewalUploadBtn">↑ Upload Excel</button>
+            <input type="file" id="renewalFileInput" accept=".xlsx,.xls" class="hidden" />
+          </div>
+        </div>
+
+        <input type="search" class="sticky-search" id="renewalsSearch" placeholder="Search plate, IMEI, SIM, company, branch..." value="${escapeHtml(renewalsQuery)}" autocomplete="off" />
+
+        <div class="filter-row" style="margin-top: 0.7rem;">
+          <label class="filter-group">
+            <span class="filter-label">Status:</span>
+            <select id="renewalStatusFilter">
+              <option value="all" ${renewalsStatusFilter === "all" ? "selected" : ""}>All</option>
+              <option value="expired" ${renewalsStatusFilter === "expired" ? "selected" : ""}>🔴 Expired (${stats.expired})</option>
+              <option value="urgent" ${renewalsStatusFilter === "urgent" ? "selected" : ""}>🚨 Urgent (${stats.urgent})</option>
+              <option value="soon" ${renewalsStatusFilter === "soon" ? "selected" : ""}>⚠️⚠️ Soon (${stats.soon})</option>
+              <option value="upcoming" ${renewalsStatusFilter === "upcoming" ? "selected" : ""}>⚠️ Upcoming (${stats.upcoming})</option>
+              <option value="active" ${renewalsStatusFilter === "active" ? "selected" : ""}>🟢 Active (${stats.active})</option>
+              <option value="paid" ${renewalsStatusFilter === "paid" ? "selected" : ""}>✅ Paid (${stats.paid})</option>
+            </select>
+          </label>
+
+          <label class="filter-group">
+            <span class="filter-label">Company:</span>
+            <select id="renewalCompanyFilter">
+              <option value="all" ${renewalsCompanyFilter === "all" ? "selected" : ""}>All companies</option>
+              ${companies.map((c) => {
+                const count = renewals.filter((r) => r.company === c).length;
+                return `<option value="${escapeHtml(c)}" ${renewalsCompanyFilter === c ? "selected" : ""}>${escapeHtml(c)} (${count})</option>`;
+              }).join("")}
+            </select>
+          </label>
+
+          <label class="filter-group">
+            <span class="filter-label">Year:</span>
+            <select id="renewalYearFilter">
+              <option value="all" ${renewalsYearFilter === "all" ? "selected" : ""}>All years</option>
+              ${[1,2,3,4,5].map((y) => {
+                const count = decorated.filter((d) => d.status.currentYear === y).length;
+                return `<option value="${y}" ${renewalsYearFilter === String(y) ? "selected" : ""}>Year ${y} (${count})</option>`;
+              }).join("")}
+            </select>
+          </label>
+
+          ${(renewalsStatusFilter !== "all" || renewalsCompanyFilter !== "all" || renewalsYearFilter !== "all" || renewalsQuery) ? `
+            <button type="button" class="btn btn-secondary btn-sm" id="clearRenewalFilters">✕ Clear</button>
+          ` : ""}
+        </div>
+
+        <!-- Desktop table -->
+        <div class="table-wrap renewal-table-desktop" style="margin-top: 1rem;">
+          <table>
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Plate / Vehicle</th>
+                <th>Company</th>
+                <th>IMEI</th>
+                <th>SIM</th>
+                <th>Created</th>
+                <th>Expiry</th>
+                <th>Year</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${filtered.length === 0 ? `
+                <tr class="empty-row"><td colspan="9">${decorated.length === 0 ? "No renewals yet. Click ↑ Upload Excel." : "No renewals match your filters."}</td></tr>
+              ` : filtered.map(({ renewal: r, status }) => {
+                const meta = renewalStatusMeta(status.status);
+                const daysText = status.daysUntilExpiry === null ? "—"
+                  : status.daysUntilExpiry < 0 ? `${Math.abs(status.daysUntilExpiry)} days ago`
+                  : status.daysUntilExpiry === 0 ? "Today"
+                  : `in ${status.daysUntilExpiry} days`;
+                return `
+                  <tr>
+                    <td><span class="status-pill ${meta.pillClass}">${meta.icon} ${escapeHtml(meta.label.split(" ")[0])}</span></td>
+                    <td>
+                      <strong>${escapeHtml(r.plateNumber || "—")}</strong><br>
+                      <span style="font-size:0.78rem; color:#64748b;">${escapeHtml(r.vehicleName || "")}</span>
+                    </td>
+                    <td>${escapeHtml(r.company || "—")}${r.branch ? `<br><span style="font-size:0.75rem; color:#94a3b8;">${escapeHtml(r.branch)}</span>` : ""}</td>
+                    <td class="mono">${escapeHtml(r.imei)}</td>
+                    <td class="mono">
+                      ${escapeHtml(r.simNumber || "—")}
+                      ${r.simProvider ? `<br><span style="font-size:0.72rem; color:#64748b;">${escapeHtml(r.simProvider)}</span>` : ""}
+                    </td>
+                    <td class="date-cell">${formatDateIndian(r.createdDate)}</td>
+                    <td class="date-cell">
+                      ${formatDateIndian(status.nextExpiryDate)}<br>
+                      <span style="font-size:0.72rem; color:${status.daysUntilExpiry < 0 ? '#dc2626' : '#64748b'};">${daysText}</span>
+                    </td>
+                    <td>Y${status.currentYear}</td>
+                    <td class="row-actions">
+                      ${status.status === "paid" ? `
+                        <button type="button" class="btn btn-outline btn-sm view-payments-btn" data-id="${escapeHtml(r.id)}" title="View payments">💰 Paid Y${status.currentYear}</button>
+                      ` : `
+                        <button type="button" class="btn btn-primary btn-sm collect-payment-btn" data-id="${escapeHtml(r.id)}" data-year="${status.currentYear}">💰 Mark Paid</button>
+                      `}
+                      <button type="button" class="btn btn-outline btn-sm renewal-history-btn" data-id="${escapeHtml(r.id)}" title="Payment history">📋</button>
+                      ${isAdmin ? `<button type="button" class="btn btn-outline btn-sm renewal-delete-btn" data-id="${escapeHtml(r.id)}" title="Delete">🗑</button>` : ""}
+                    </td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Mobile card grid -->
+        <div class="renewal-card-grid">
+          ${filtered.length === 0 ? `
+            <div class="entry-empty">
+              <div class="entry-empty-icon">📅</div>
+              <h3>No renewals</h3>
+              <p>${decorated.length === 0 ? "Click ↑ Upload Excel to add vehicles." : "Try different filters."}</p>
+            </div>
+          ` : filtered.map(({ renewal: r, status }) => {
+            const meta = renewalStatusMeta(status.status);
+            const daysText = status.daysUntilExpiry === null ? "—"
+              : status.daysUntilExpiry < 0 ? `expired ${Math.abs(status.daysUntilExpiry)}d ago`
+              : status.daysUntilExpiry === 0 ? "today"
+              : `in ${status.daysUntilExpiry}d`;
+            return `
+              <article class="tk-card renewal-card ${meta.pillClass}-card">
+                <div class="tk-card-head">
+                  <span class="status-pill ${meta.pillClass}">${meta.icon} ${escapeHtml(meta.label)}</span>
+                  <span class="tk-chip">Y${status.currentYear}</span>
+                </div>
+                <div class="renewal-card-body">
+                  <div><strong>${escapeHtml(r.plateNumber || "—")}</strong> · ${escapeHtml(r.vehicleName || "")}</div>
+                  <div style="font-size:0.78rem; color:#64748b;">${escapeHtml(r.company || "—")}${r.branch ? ` · ${escapeHtml(r.branch)}` : ""}</div>
+                  <div class="mono" style="font-size:0.75rem;">IMEI: ${escapeHtml(r.imei)}</div>
+                  <div class="mono" style="font-size:0.75rem;">SIM: ${escapeHtml(r.simNumber || "—")} ${r.simProvider ? `(${escapeHtml(r.simProvider)})` : ""}</div>
+                  <div style="font-size:0.78rem; margin-top:0.3rem;">
+                    Expiry: <strong>${formatDateIndian(status.nextExpiryDate)}</strong> <span style="color:${status.daysUntilExpiry < 0 ? '#dc2626' : '#64748b'};">(${daysText})</span>
+                  </div>
+                </div>
+                <div class="tk-actions">
+                  ${status.status === "paid" ? `
+                    <button type="button" class="btn btn-outline btn-sm view-payments-btn" data-id="${escapeHtml(r.id)}">💰 Paid Y${status.currentYear}</button>
+                  ` : `
+                    <button type="button" class="btn btn-primary btn-sm collect-payment-btn" data-id="${escapeHtml(r.id)}" data-year="${status.currentYear}">💰 Mark Paid</button>
+                  `}
+                  <button type="button" class="btn btn-outline btn-sm renewal-history-btn" data-id="${escapeHtml(r.id)}">📋 History</button>
+                  ${isAdmin ? `<button type="button" class="btn btn-outline btn-sm renewal-delete-btn" data-id="${escapeHtml(r.id)}">🗑</button>` : ""}
+                </div>
+              </article>
+            `;
+          }).join("")}
+        </div>
+      </section>
+    </main>
+  `;
+
+  if (isAdmin) bindAdminNav();
+  bindLogout();
+
+  // Wire handlers
+  document.getElementById("renewalsSearch")?.addEventListener("input", (e) => {
+    renewalsQuery = e.target.value;
+    render();
+  });
+  document.getElementById("renewalStatusFilter")?.addEventListener("change", (e) => {
+    renewalsStatusFilter = e.target.value;
+    render();
+  });
+  document.getElementById("renewalCompanyFilter")?.addEventListener("change", (e) => {
+    renewalsCompanyFilter = e.target.value;
+    render();
+  });
+  document.getElementById("renewalYearFilter")?.addEventListener("change", (e) => {
+    renewalsYearFilter = e.target.value;
+    render();
+  });
+  document.getElementById("clearRenewalFilters")?.addEventListener("click", () => {
+    renewalsQuery = "";
+    renewalsStatusFilter = "all";
+    renewalsCompanyFilter = "all";
+    renewalsYearFilter = "all";
+    render();
+  });
+
+  // Upload
+  document.getElementById("renewalUploadBtn")?.addEventListener("click", () => {
+    document.getElementById("renewalFileInput")?.click();
+  });
+  document.getElementById("renewalFileInput")?.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    await handleRenewalExcelUpload(file);
+  });
+
+  // Export
+  document.getElementById("renewalExportBtn")?.addEventListener("click", () => {
+    exportRenewalsToExcel(filtered.map((d) => ({ ...d.renewal, _status: d.status })));
+  });
+
+  // Row actions
+  app.querySelectorAll(".collect-payment-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.id;
+      const year = parseInt(btn.dataset.year, 10);
+      openCollectPaymentModal(id, year);
+    });
+  });
+  app.querySelectorAll(".view-payments-btn, .renewal-history-btn").forEach((btn) => {
+    btn.addEventListener("click", () => openPaymentHistoryModal(btn.dataset.id));
+  });
+  app.querySelectorAll(".renewal-delete-btn").forEach((btn) => {
+    btn.addEventListener("click", () => deleteRenewalConfirm(btn.dataset.id));
+  });
+}
+
+/* ---------- Payment collection modal ---------- */
+function openCollectPaymentModal(renewalId, year) {
+  const r = renewals.find((x) => x.id === renewalId);
+  if (!r) return;
+  const today = formatYMD(new Date());
+  modal.innerHTML = `
+    <h3>💰 Mark Payment Collected</h3>
+    <p class="modal-desc">
+      <strong>${escapeHtml(r.plateNumber)}</strong> · ${escapeHtml(r.vehicleName || "")}<br>
+      <span style="color:#64748b;">Company: ${escapeHtml(r.company || "—")} · IMEI: ${escapeHtml(r.imei)}</span>
+    </p>
+    <div class="payment-form">
+      <div class="form-row">
+        <label>Year:</label>
+        <input type="number" id="payYear" value="${year}" min="1" max="20" class="input-sm" />
+      </div>
+      <div class="form-row">
+        <label>Collection Date <span class="required">*</span></label>
+        <input type="date" id="payDate" value="${today}" required />
+      </div>
+      <div class="form-row">
+        <label>Amount (₹) <span class="required">*</span></label>
+        <input type="number" id="payAmount" placeholder="e.g. 500" min="0" step="1" required />
+      </div>
+      <div class="form-row">
+        <label>Receipt Number</label>
+        <input type="text" id="payReceipt" placeholder="e.g. R-2026-001" />
+      </div>
+      <div class="form-row">
+        <label>Payment Mode <span class="required">*</span></label>
+        <select id="payMode" required>
+          <option value="cash">💵 Cash</option>
+          <option value="upi">📱 UPI</option>
+          <option value="bank">🏦 Bank Transfer</option>
+          <option value="cheque">📄 Cheque</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Notes (optional)</label>
+        <textarea id="payNotes" rows="2" placeholder="Any additional details..."></textarea>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
+      <button type="button" class="btn btn-primary modal-confirm">Save Payment</button>
+    </div>
+  `;
+  modalOverlay.classList.remove("hidden");
+  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+  modalOverlay.onclick = (e) => { if (e.target === modalOverlay) closeModal(); };
+
+  const confirmBtn = modal.querySelector(".modal-confirm");
+  confirmBtn.addEventListener("click", async () => {
+    if (confirmBtn.dataset.busy === "1") return;
+    const payYear = parseInt(document.getElementById("payYear").value, 10);
+    const date = document.getElementById("payDate").value;
+    const amount = parseFloat(document.getElementById("payAmount").value);
+    const receipt = document.getElementById("payReceipt").value.trim();
+    const mode = document.getElementById("payMode").value;
+    const notes = document.getElementById("payNotes").value.trim();
+
+    if (!date || !amount || amount <= 0 || !mode || isNaN(payYear) || payYear < 1) {
+      showToast("Please fill Year, Date, Amount, and Mode.", true);
+      return;
+    }
+
+    await runWithBusyButton(confirmBtn, async () => {
+      try {
+        const current = renewals.find((x) => x.id === renewalId);
+        if (!current) throw new Error("Renewal not found.");
+        const payments = [...(current.payments || [])];
+        payments.push({
+          year: payYear,
+          date,
+          amount,
+          receiptNumber: receipt || null,
+          mode,
+          notes: notes || null,
+          collectedBy: currentUser,
+          collectedAt: new Date().toISOString(),
+        });
+        const updated = await updateRenewalPayments(renewalId, payments);
+        const idx = renewals.findIndex((x) => x.id === renewalId);
+        if (idx >= 0) renewals[idx] = updated;
+        closeModal();
+        showToast(`✓ Payment saved for ${current.plateNumber}`);
+        render();
+      } catch (err) {
+        showToast(err.message || "Failed to save payment.", true);
+      }
+    }, "Saving…");
+  });
+}
+
+/* ---------- Payment history modal ---------- */
+function openPaymentHistoryModal(renewalId) {
+  const r = renewals.find((x) => x.id === renewalId);
+  if (!r) return;
+  const payments = (r.payments || []).slice().sort((a, b) => (a.year || 0) - (b.year || 0));
+  const status = computeRenewalStatus(r);
+  const totalPaid = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const perms = getUserPerms(currentUser);
+  const isAdmin = perms?.isAdmin;
+
+  modal.innerHTML = `
+    <h3>📋 Payment History</h3>
+    <p class="modal-desc">
+      <strong>${escapeHtml(r.plateNumber)}</strong> · ${escapeHtml(r.vehicleName || "")}<br>
+      <span style="color:#64748b;">${escapeHtml(r.company || "")} · Created: ${formatDateIndian(r.createdDate)} · Current Year: ${status.currentYear}</span>
+    </p>
+    <div class="payment-history-list">
+      ${payments.length === 0 ? `
+        <div class="entry-empty"><p>No payments recorded yet.</p></div>
+      ` : payments.map((p) => `
+        <div class="payment-history-item">
+          <div class="phi-head">
+            <span class="phi-year">Year ${p.year}</span>
+            <span class="phi-amount">₹${Number(p.amount || 0).toLocaleString("en-IN")}</span>
+            ${isAdmin ? `<button type="button" class="btn-icon-sm delete-payment-btn" data-year="${p.year}" title="Delete payment">🗑</button>` : ""}
+          </div>
+          <div class="phi-body">
+            <div>📅 ${formatDateIndian(p.date)} · ${escapeHtml(p.mode || "")}</div>
+            ${p.receiptNumber ? `<div>🧾 ${escapeHtml(p.receiptNumber)}</div>` : ""}
+            <div style="font-size:0.72rem; color:#94a3b8;">By ${escapeHtml(p.collectedBy || "?")} on ${p.collectedAt ? new Date(p.collectedAt).toLocaleString("en-IN") : "?"}</div>
+            ${p.notes ? `<div style="font-size:0.78rem; color:#64748b; margin-top:0.3rem;">${escapeHtml(p.notes)}</div>` : ""}
+          </div>
+        </div>
+      `).join("")}
+    </div>
+    <div class="payment-total">Total collected: <strong>₹${totalPaid.toLocaleString("en-IN")}</strong></div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Close</button>
+    </div>
+  `;
+  modalOverlay.classList.remove("hidden");
+  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+  modalOverlay.onclick = (e) => { if (e.target === modalOverlay) closeModal(); };
+
+  // Admin can delete individual payments
+  if (isAdmin) {
+    modal.querySelectorAll(".delete-payment-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const year = parseInt(btn.dataset.year, 10);
+        if (!confirm(`Delete Year ${year} payment record? This cannot be undone.`)) return;
+        const current = renewals.find((x) => x.id === renewalId);
+        const newPayments = (current.payments || []).filter((p) => p.year !== year);
+        try {
+          const updated = await updateRenewalPayments(renewalId, newPayments);
+          const idx = renewals.findIndex((x) => x.id === renewalId);
+          if (idx >= 0) renewals[idx] = updated;
+          closeModal();
+          showToast(`✓ Year ${year} payment removed.`);
+          render();
+        } catch (err) {
+          showToast(err.message || "Delete failed.", true);
+        }
+      });
+    });
+  }
+}
+
+/* ---------- Delete renewal ---------- */
+async function deleteRenewalConfirm(id) {
+  const r = renewals.find((x) => x.id === id);
+  if (!r) return;
+  if (!confirm(`Delete renewal record for ${r.plateNumber}? This also removes payment history. Cannot be undone.`)) return;
+  try {
+    await deleteRenewal(id);
+    renewals = renewals.filter((x) => x.id !== id);
+    showToast(`✓ Deleted ${r.plateNumber}`);
+    render();
+  } catch (err) {
+    showToast(err.message || "Delete failed.", true);
+  }
+}
+
+/* ---------- Excel upload ---------- */
+async function handleRenewalExcelUpload(file) {
+  renderLoading("Reading Excel file...");
+  try {
+    const XLSX = window.XLSX;
+    if (!XLSX) throw new Error("Excel library not loaded.");
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array", cellDates: true });
+
+    // Try each sheet, accept any that has the expected columns
+    const parsed = [];
+    const errors = [];
+    for (const sheetName of wb.SheetNames) {
+      const ws = wb.Sheets[sheetName];
+      // Read with header: 1 to get raw rows
+      const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: false });
+
+      // Find the header row — look for row containing "Plate Number" or "IMEI Number"
+      let headerRowIdx = -1;
+      for (let i = 0; i < Math.min(10, raw.length); i++) {
+        const row = raw[i] || [];
+        const joined = row.map((c) => String(c || "").toLowerCase()).join("|");
+        if (joined.includes("plate number") || joined.includes("imei number")) {
+          headerRowIdx = i;
+          break;
+        }
+      }
+      if (headerRowIdx < 0) continue;
+
+      const headers = raw[headerRowIdx].map((h) => String(h || "").trim());
+      const colMap = {};
+      headers.forEach((h, i) => {
+        const key = h.toLowerCase();
+        if (key === "reseller name") colMap.reseller = i;
+        else if (key === "company") colMap.company = i;
+        else if (key === "branch") colMap.branch = i;
+        else if (key === "object name" || key === "vehicle name") colMap.vehicleName = i;
+        else if (key === "plate number") colMap.plateNumber = i;
+        else if (key === "imei number") colMap.imei = i;
+        else if (key === "sim number") colMap.simNumber = i;
+        else if (key === "sim provider") colMap.simProvider = i;
+        else if (key === "secondary sim number") colMap.secondarySim = i;
+        else if (key === "secondary sim provider") colMap.secondarySimProvider = i;
+        else if (key === "gps device type") colMap.gpsDeviceType = i;
+        else if (key === "created date") colMap.createdDate = i;
+      });
+
+      if (colMap.imei == null || colMap.createdDate == null) {
+        errors.push(`Sheet "${sheetName}": missing required columns (IMEI Number / Created Date).`);
+        continue;
+      }
+
+      // Parse data rows
+      for (let i = headerRowIdx + 1; i < raw.length; i++) {
+        const row = raw[i] || [];
+        const imei = row[colMap.imei];
+        if (!imei || String(imei).trim() === "" || String(imei).trim() === "--") continue;
+
+        const createdRaw = row[colMap.createdDate];
+        const createdDate = parseExcelDate(createdRaw);
+        if (!createdDate) {
+          errors.push(`Row ${i + 1}: invalid Created Date (${createdRaw}) for IMEI ${imei}`);
+          continue;
+        }
+
+        const cleanVal = (v) => {
+          if (v == null) return "";
+          const s = String(v).trim();
+          return (s === "" || s === "--") ? "" : s;
+        };
+
+        parsed.push({
+          plateNumber: cleanVal(row[colMap.plateNumber]) || "—",
+          vehicleName: cleanVal(row[colMap.vehicleName]),
+          company: cleanVal(row[colMap.company]),
+          branch: cleanVal(row[colMap.branch]),
+          reseller: cleanVal(row[colMap.reseller]),
+          imei: String(imei).trim(),
+          simNumber: cleanVal(row[colMap.simNumber]),
+          simProvider: cleanVal(row[colMap.simProvider]),
+          secondarySim: cleanVal(row[colMap.secondarySim]),
+          secondarySimProvider: cleanVal(row[colMap.secondarySimProvider]),
+          gpsDeviceType: cleanVal(row[colMap.gpsDeviceType]),
+          createdDate: formatYMD(createdDate),
+          lastUploadedAt: new Date().toISOString(),
+          lastUploadedBy: currentUser,
+          payments: [], // will be preserved by DB upsert for existing rows via merge logic
+        });
+      }
+    }
+
+    if (parsed.length === 0) {
+      renderCurrent();
+      showToast(`No valid rows found. ${errors.length ? errors[0] : "Check Excel format."}`, true);
+      return;
+    }
+
+    renderLoading(`Uploading ${parsed.length} vehicles...`);
+
+    // IMPORTANT: for existing IMEIs, preserve their payments.
+    // Build a map of existing payments by IMEI
+    const existingByImei = {};
+    renewals.forEach((r) => { existingByImei[r.imei] = r; });
+
+    // Merge: use existing payments for rows where IMEI already in DB
+    const toUpsert = parsed.map((p) => {
+      const existing = existingByImei[p.imei];
+      if (existing) {
+        return {
+          ...p,
+          id: existing.id,  // keep same id
+          payments: existing.payments || [],  // KEEP payment history
+          notes: existing.notes || "",
+        };
+      }
+      return p;
+    });
+
+    // Count stats
+    let inserted = 0, updated = 0;
+    toUpsert.forEach((p) => {
+      if (existingByImei[p.imei]) updated++;
+      else inserted++;
+    });
+
+    await bulkUpsertRenewals(toUpsert);
+    await refreshAllData();
+
+    const summary = `✓ Upload complete: ${inserted} new, ${updated} updated.${errors.length ? ` ${errors.length} rows skipped.` : ""}`;
+    showToast(summary);
+    if (errors.length > 0) {
+      console.warn("Renewal upload errors:", errors);
+    }
+    render();
+  } catch (err) {
+    renderCurrent();
+    showToast(err.message || "Upload failed.", true);
+    console.error(err);
+  }
+}
+
+function renderCurrent() {
+  try { render(); } catch {}
+}
+
+function parseExcelDate(val) {
+  if (val == null) return null;
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
+  const s = String(val).trim();
+  if (!s || s === "--") return null;
+  // Try DD-MM-YYYY (common Indian format)
+  let m = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/);
+  if (m) {
+    const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
+    return isNaN(d.getTime()) ? null : d;
+  }
+  // YYYY-MM-DD
+  m = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+  if (m) {
+    const d = new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
+    return isNaN(d.getTime()) ? null : d;
+  }
+  // Fallback: Date parse
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/* ---------- Export ---------- */
+function exportRenewalsToExcel(list) {
+  const XLSX = window.XLSX;
+  if (!XLSX) { showToast("Excel library not loaded.", true); return; }
+
+  const rows = list.map((r) => {
+    const status = r._status || computeRenewalStatus(r);
+    const totalPaid = (r.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const paidYears = (r.payments || []).map((p) => p.year).sort().join(", ");
+    return {
+      "Plate Number": r.plateNumber,
+      "Vehicle Name": r.vehicleName,
+      "Company": r.company,
+      "Branch": r.branch,
+      "IMEI": r.imei,
+      "SIM Number": r.simNumber,
+      "SIM Provider": r.simProvider,
+      "Secondary SIM": r.secondarySim,
+      "GPS Device": r.gpsDeviceType,
+      "Created Date": r.createdDate,
+      "Current Year": status.currentYear,
+      "Next Expiry": formatYMD(status.nextExpiryDate),
+      "Days to Expiry": status.daysUntilExpiry,
+      "Status": renewalStatusMeta(status.status).label,
+      "Years Paid": paidYears,
+      "Total Collected (₹)": totalPaid,
+    };
+  });
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Renewals");
+  const fname = `renewals-export-${formatYMD(new Date())}.xlsx`;
+  XLSX.writeFile(wb, fname);
+  showToast(`✓ Exported ${rows.length} rows`);
+}
+
 initApp();
-
-
-
-
-
-
-
