@@ -11184,6 +11184,117 @@ button.clickable-card:focus-visible {
   font-size: 0.85rem;
 }
 
+/* v3.9.8 — Theme picker inside doc modal */
+.doc-theme-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.45rem;
+}
+
+.doc-theme-opt {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.55rem;
+  border: 2px solid #e2e8f0;
+  border-radius: 7px;
+  cursor: pointer;
+  background: #fff;
+  transition: all 0.15s;
+}
+
+.doc-theme-opt:hover {
+  border-color: #94a3b8;
+}
+
+.doc-theme-opt.selected {
+  border-color: #0891b2;
+  background: #ecfeff;
+  box-shadow: 0 0 0 2px rgba(8, 145, 178, 0.15);
+}
+
+.doc-theme-opt input[type="radio"] {
+  display: none;
+}
+
+.doc-theme-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.doc-theme-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
+}
+
+.doc-theme-label {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #0f172a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* v3.9.8 — Doc number badge in modal header (edit mode) */
+.doc-modal-number {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 1px 8px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.8rem;
+  font-weight: 700;
+  background: #fff;
+  color: #0e7490;
+  border: 1.5px solid #0891b2;
+  border-radius: 5px;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+
+/* Disabled Bill To in edit mode */
+.doc-billto-select:disabled {
+  background: #f1f5f9;
+  color: #475569;
+  cursor: not-allowed;
+  border-color: #cbd5e1;
+}
+
+/* Edit button in doc table */
+.edit-doc-btn {
+  background: #fff;
+  border-color: #cbd5e1;
+  color: #334155;
+}
+
+.edit-doc-btn:hover {
+  background: #f1f5f9;
+  border-color: #0891b2;
+  color: #0e7490;
+}
+
+@media (max-width: 520px) {
+  .doc-theme-picker {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .doc-theme-label {
+    font-size: 0.72rem;
+  }
+  .doc-modal-number {
+    font-size: 0.72rem;
+    display: block;
+    margin: 4px 0 0;
+    width: fit-content;
+  }
+}
+
 /* --- Mobile: single column, tighter --- */
 @media (max-width: 520px) {
   .modal.modal-doc-gen {

@@ -1312,8 +1312,11 @@ function rowToDocument(row) {
     notes: row.notes || "",
     shipToAddress: row.ship_to_address || "",
     htmlSnapshot: row.html_snapshot || "",
+    themeColor: row.theme_color || null,
+    showPeriod: row.show_period === null || row.show_period === undefined ? true : !!row.show_period,
     createdAt: row.created_at,
     createdBy: row.created_by,
+    updatedAt: row.updated_at || null,
   };
 }
 
@@ -1366,11 +1369,43 @@ async function createRenewalDocument(doc) {
     notes: doc.notes || null,
     ship_to_address: doc.shipToAddress || null,
     html_snapshot: doc.htmlSnapshot || null,
+    theme_color: doc.themeColor || null,
+    show_period: doc.showPeriod === false ? false : true,
     created_by: doc.createdBy || null,
   };
   const { data, error } = await getDb()
     .from("renewal_documents")
     .insert(row)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return rowToDocument(data);
+}
+
+// v3.9.8 — update an existing document (edit mode). Keeps docNumber, created_at, vehicles.
+async function updateRenewalDocument(id, doc) {
+  const row = {
+    doc_date: doc.docDate,
+    subtotal: Number(doc.subtotal) || 0,
+    cgst: Number(doc.cgst) || 0,
+    sgst: Number(doc.sgst) || 0,
+    igst: Number(doc.igst) || 0,
+    total: Number(doc.total) || 0,
+    hsn_code: doc.hsnCode || null,
+    gst_rate: Number(doc.gstRate) || null,
+    payment_mode: doc.paymentMode || null,
+    notes: doc.notes || null,
+    ship_to_address: doc.shipToAddress || null,
+    html_snapshot: doc.htmlSnapshot || null,
+    theme_color: doc.themeColor || null,
+    show_period: doc.showPeriod === false ? false : true,
+    vehicles: doc.vehicles || [],
+    updated_at: new Date().toISOString(),
+  };
+  const { data, error } = await getDb()
+    .from("renewal_documents")
+    .update(row)
+    .eq("id", id)
     .select()
     .single();
   if (error) throw new Error(error.message);

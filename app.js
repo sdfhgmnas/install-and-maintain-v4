@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.9.7";
+const APP_VERSION = "3.9.9";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -13522,6 +13522,7 @@ function renderDocBadge(doc) {
 // primary = soft pastel used for backgrounds / banners (readable with dark fg text)
 // accent  = dark readable tone used for text, borders, dividers
 // fg      = dark text color used on top of light primary backgrounds
+// v3.9.9 — Added Amber (gold/bronze) theme.
 const DOC_THEMES = {
   classic:  { label: "Classic",  primary: "#f1f5f9", accent: "#334155", fg: "#0f172a" }, // slate
   teal:     { label: "Teal",     primary: "#cffafe", accent: "#0e7490", fg: "#0f172a" }, // cyan
@@ -13529,6 +13530,7 @@ const DOC_THEMES = {
   burgundy: { label: "Burgundy", primary: "#fee2e2", accent: "#9f1239", fg: "#0f172a" }, // rose
   green:    { label: "Green",    primary: "#d1fae5", accent: "#166534", fg: "#0f172a" }, // emerald
   purple:   { label: "Purple",   primary: "#ede9fe", accent: "#6d28d9", fg: "#0f172a" }, // violet
+  amber:    { label: "Amber",    primary: "#fef3c7", accent: "#b45309", fg: "#0f172a" }, // gold / bronze
 };
 
 function renderRenewalSubNav(activeKey, isAdmin) {
@@ -13993,7 +13995,7 @@ function renderRenewalSettingsSubPage() {
           <div class="form-row">
             <label>Document Theme Color</label>
             <div class="theme-picker">
-              ${['classic', 'teal', 'blue', 'burgundy', 'green', 'purple'].map((t) => {
+              ${['classic', 'teal', 'blue', 'burgundy', 'green', 'purple', 'amber'].map((t) => {
                 const meta = DOC_THEMES[t];
                 return `
                   <label class="theme-option ${(p.themeColor || 'classic') === t ? 'selected' : ''}">
@@ -14159,7 +14161,8 @@ function renderRenewalDocumentsSubPage() {
                   <td>${escapeHtml(d.createdBy || "?")}</td>
                   <td class="row-actions">
                     <button type="button" class="btn btn-primary btn-sm reopen-doc-btn" data-id="${escapeHtml(d.id)}">👁 View / Print</button>
-                    ${isAdmin ? `<button type="button" class="btn btn-outline btn-sm delete-doc-btn" data-id="${escapeHtml(d.id)}">🗑</button>` : ""}
+                    <button type="button" class="btn btn-outline btn-sm edit-doc-btn" data-id="${escapeHtml(d.id)}" title="Edit this document">✏️ Edit</button>
+                    ${isAdmin ? `<button type="button" class="btn btn-outline btn-sm delete-doc-btn" data-id="${escapeHtml(d.id)}" title="Delete">🗑</button>` : ""}
                   </td>
                 </tr>
               `).join("")}
@@ -14179,6 +14182,13 @@ function renderRenewalDocumentsSubPage() {
       const d = renewalDocuments.find((x) => x.id === btn.dataset.id);
       if (d?.htmlSnapshot) openDocumentPrintWindow(d.htmlSnapshot, d.docNumber);
       else showToast("Document HTML not saved.", true);
+    });
+  });
+  app.querySelectorAll(".edit-doc-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const d = renewalDocuments.find((x) => x.id === btn.dataset.id);
+      if (!d) { showToast("Document not found.", true); return; }
+      openDocGenerationModal(d.docType, d);
     });
   });
   app.querySelectorAll(".delete-doc-btn").forEach((btn) => {
@@ -14250,9 +14260,18 @@ function openBulkAccountAssignModal() {
 /* ============================================================
    DOCUMENT GENERATION
    ============================================================ */
-function openDocGenerationModal(docType) {
-  const count = selectedVehicleIds.size;
-  if (count === 0) { showToast("Select vehicles first.", true); return; }
+function openDocGenerationModal(docType, editDoc = null) {
+  // ──────────────────────────────────────────────────────────
+  // EDIT MODE: docType overridden by the saved doc; use saved vehicles.
+  // CREATE MODE: use selectedVehicleIds from vehicles sub-page.
+  // ──────────────────────────────────────────────────────────
+  const isEdit = !!editDoc;
+  if (isEdit) {
+    docType = editDoc.docType; // force original type
+  } else {
+    const count = selectedVehicleIds.size;
+    if (count === 0) { showToast("Select vehicles first.", true); return; }
+  }
 
   if (!sellerProfile || !sellerProfile.businessName) {
     showToast("⚠️ Set up Seller Profile first (Settings tab).", true);
@@ -14264,7 +14283,17 @@ function openDocGenerationModal(docType) {
     return;
   }
 
-  const selectedRenewals = renewals.filter((r) => selectedVehicleIds.has(r.id));
+  // Build line-item source. In edit mode, use the stored vehicle snapshot.
+  const selectedRenewals = isEdit
+    ? (editDoc.vehicles || []).map((v) => ({
+        id: v.renewalId,
+        plateNumber: v.plateNumber,
+        vehicleName: v.vehicleName,
+        imei: v.imei,
+        simNumber: v.simNumber,
+        _snapshot: v, // keep so we don't recompute cycle
+      }))
+    : renewals.filter((r) => selectedVehicleIds.has(r.id));
 
   // Filter accounts by GST compatibility for selected doc type
   const filteredAccounts = renewalAccounts.filter((a) => {
@@ -14273,16 +14302,23 @@ function openDocGenerationModal(docType) {
     return true; // PI works for both
   }).sort((a, b) => a.name.localeCompare(b.name));
 
-  if (filteredAccounts.length === 0) {
+  if (filteredAccounts.length === 0 && !isEdit) {
     const needText = docType === "INV" ? "GST-registered" : docType === "R" ? "Non-GST" : "any";
     showToast(`⚠️ No ${needText} accounts found. Add one in Accounts tab.`, true);
     return;
   }
 
-  // Auto-select FIRST account so form shows immediately (user can change dropdown)
-  const likelyAccountId = filteredAccounts[0].id;
+  // In edit mode: lock to the doc's account (even if GST-filter would've hidden it).
+  const likelyAccountId = isEdit
+    ? editDoc.accountId
+    : filteredAccounts[0].id;
 
   const docLabel = { PI: "Proforma Invoice", INV: "Tax Invoice", R: "Receipt" }[docType];
+
+  // Current theme — can be changed from the picker; starts from doc / seller default.
+  let currentTheme = (editDoc && editDoc.themeColor)
+    ? editDoc.themeColor
+    : (sellerProfile.themeColor || "classic");
 
   const renderDocForm = (accountId) => {
     const account = renewalAccounts.find((a) => a.id === accountId);
@@ -14290,11 +14326,38 @@ function openDocGenerationModal(docType) {
       return `<div class="doc-form-empty">Select a customer account above to continue.</div>`;
     }
     const defaultRate = account.defaultRatePerYear || 500;
+    const prefRate     = isEdit && editDoc.vehicles?.[0]?.rate ? editDoc.vehicles[0].rate : defaultRate;
+    const prefGstRate  = isEdit ? (editDoc.gstRate || 18) : (account.gstRate || 18);
+    const prefHsn      = isEdit ? (editDoc.hsnCode || '998412') : (account.hsnCode || '998412');
+    const prefDate     = isEdit ? editDoc.docDate : formatYMD(new Date());
+    const prefShipTo   = isEdit ? (editDoc.shipToAddress || '') : '';
+    const prefShowP    = isEdit ? (editDoc.showPeriod !== false) : true;
+    const prefNotes    = isEdit ? (editDoc.notes || '') : '';
+    const prefPayMode  = isEdit ? (editDoc.paymentMode || 'cash') : 'cash';
+
     const defaultShipTo = [account.address, account.city, account.state, account.pincode].filter(Boolean).join(", ");
     const applyGst = (docType === "INV") || (docType === "PI" && account.isGstRegistered);
     const gstPill = applyGst
       ? `<span class="doc-pill doc-pill-on">GST will apply</span>`
       : `<span class="doc-pill doc-pill-off">No GST</span>`;
+
+    const themePickerHtml = `
+      <div class="doc-theme-picker">
+        ${Object.keys(DOC_THEMES).map((t) => {
+          const meta = DOC_THEMES[t];
+          const selected = currentTheme === t;
+          return `
+            <label class="doc-theme-opt ${selected ? 'selected' : ''}" title="${escapeHtml(meta.label)}">
+              <input type="radio" name="doc_theme" value="${t}" ${selected ? 'checked' : ''} />
+              <span class="doc-theme-swatch" style="background: ${meta.primary}; border-color: ${meta.accent};">
+                <span class="doc-theme-dot" style="background: ${meta.accent};"></span>
+              </span>
+              <span class="doc-theme-label">${escapeHtml(meta.label)}</span>
+            </label>
+          `;
+        }).join("")}
+      </div>
+    `;
 
     return `
       <div class="doc-form-section">
@@ -14305,11 +14368,11 @@ function openDocGenerationModal(docType) {
         <div class="doc-field-grid-2">
           <div class="form-row">
             <label>Document Date</label>
-            <input type="date" id="doc_date" value="${formatYMD(new Date())}" />
+            <input type="date" id="doc_date" value="${prefDate}" />
           </div>
           <div class="form-row">
             <label>HSN / SAC Code</label>
-            <input type="text" id="doc_hsn" value="${escapeHtml(account.hsnCode || '998412')}" />
+            <input type="text" id="doc_hsn" value="${escapeHtml(prefHsn)}" />
           </div>
         </div>
       </div>
@@ -14323,13 +14386,22 @@ function openDocGenerationModal(docType) {
         <div class="doc-field-grid-2">
           <div class="form-row">
             <label>Rate per SIM / Year (₹)</label>
-            <input type="number" id="doc_rate" value="${defaultRate}" min="0" />
+            <input type="number" id="doc_rate" value="${prefRate}" min="0" />
           </div>
           <div class="form-row">
             <label>GST Rate (%)</label>
-            <input type="number" id="doc_gstRate" value="${account.gstRate || 18}" min="0" max="28" step="0.01" />
+            <input type="number" id="doc_gstRate" value="${prefGstRate}" min="0" max="28" step="0.01" />
           </div>
         </div>
+      </div>
+
+      <div class="doc-form-section">
+        <div class="doc-section-title">
+          <span class="doc-section-icon">🎨</span>
+          <span>Theme Color</span>
+          <span class="doc-pill doc-pill-off">Per-doc</span>
+        </div>
+        ${themePickerHtml}
       </div>
 
       <div class="doc-form-section">
@@ -14339,10 +14411,10 @@ function openDocGenerationModal(docType) {
         </div>
         <div class="form-row">
           <label>Ship To Address <span class="label-hint">(blank = same as Bill To)</span></label>
-          <textarea id="doc_shipTo" rows="2" placeholder="${escapeHtml(defaultShipTo)}"></textarea>
+          <textarea id="doc_shipTo" rows="2" placeholder="${escapeHtml(defaultShipTo)}">${escapeHtml(prefShipTo)}</textarea>
         </div>
         <label class="check-label">
-          <input type="checkbox" id="doc_showPeriod" checked />
+          <input type="checkbox" id="doc_showPeriod" ${prefShowP ? 'checked' : ''} />
           <span>Include <strong>Period</strong> column (subscription start / end dates)</span>
         </label>
       </div>
@@ -14376,10 +14448,10 @@ function openDocGenerationModal(docType) {
           </div>
           <div class="form-row">
             <select id="doc_payMode" required>
-              <option value="cash">💵 Cash</option>
-              <option value="upi">📱 UPI</option>
-              <option value="bank">🏦 Bank Transfer</option>
-              <option value="cheque">📄 Cheque</option>
+              <option value="cash"   ${prefPayMode === 'cash'   ? 'selected' : ''}>💵 Cash</option>
+              <option value="upi"    ${prefPayMode === 'upi'    ? 'selected' : ''}>📱 UPI</option>
+              <option value="bank"   ${prefPayMode === 'bank'   ? 'selected' : ''}>🏦 Bank Transfer</option>
+              <option value="cheque" ${prefPayMode === 'cheque' ? 'selected' : ''}>📄 Cheque</option>
             </select>
           </div>
         </div>
@@ -14391,7 +14463,7 @@ function openDocGenerationModal(docType) {
           <span>Notes <span class="label-hint">(optional)</span></span>
         </div>
         <div class="form-row">
-          <textarea id="doc_notes" rows="2" placeholder="Any additional notes to show on the document…"></textarea>
+          <textarea id="doc_notes" rows="2" placeholder="Any additional notes to show on the document…">${escapeHtml(prefNotes)}</textarea>
         </div>
       </div>
     `;
@@ -14407,8 +14479,8 @@ function openDocGenerationModal(docType) {
       <div class="doc-modal-title">
         <span class="doc-modal-icon">${docIcon}</span>
         <div>
-          <h3>Create ${docLabel}</h3>
-          <p class="doc-modal-sub">${selectedRenewals.length} vehicle${selectedRenewals.length !== 1 ? 's' : ''} selected · Review &amp; generate the PDF.</p>
+          <h3>${isEdit ? 'Edit' : 'Create'} ${docLabel}${isEdit ? ` · <span class="doc-modal-number">${escapeHtml(editDoc.docNumber)}</span>` : ''}</h3>
+          <p class="doc-modal-sub">${selectedRenewals.length} vehicle${selectedRenewals.length !== 1 ? 's' : ''} ${isEdit ? 'in this document' : 'selected'} · Review &amp; ${isEdit ? 'update' : 'generate'} the PDF.</p>
         </div>
       </div>
     </div>
@@ -14417,10 +14489,11 @@ function openDocGenerationModal(docType) {
       <div class="doc-section-title">
         <span class="doc-section-icon">🏢</span>
         <span>Bill To (Customer Account) <span class="required">*</span></span>
+        ${isEdit ? '<span class="doc-pill doc-pill-off">Locked</span>' : ''}
       </div>
-      <select id="doc_billTo" class="doc-billto-select">
+      <select id="doc_billTo" class="doc-billto-select" ${isEdit ? 'disabled' : ''}>
         <option value="">— Select customer account —</option>
-        ${filteredAccounts.map((a) => `
+        ${(isEdit ? renewalAccounts : filteredAccounts).map((a) => `
           <option value="${escapeHtml(a.id)}" ${a.id === likelyAccountId ? 'selected' : ''}>
             ${escapeHtml(a.name)}${a.isGstRegistered ? ' [GST]' : ' [Non-GST]'}${a.state ? ` · ${escapeHtml(a.state)}` : ''}
           </option>
@@ -14432,7 +14505,9 @@ function openDocGenerationModal(docType) {
 
     <div class="modal-actions doc-modal-actions">
       <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
-      <button type="button" class="btn btn-primary modal-confirm">📄 Generate ${docLabel}</button>
+      <button type="button" class="btn btn-primary modal-confirm">
+        ${isEdit ? '💾 Update ' + docLabel : '📄 Generate ' + docLabel}
+      </button>
     </div>
   `;
   modalOverlay.classList.remove("hidden");
@@ -14443,7 +14518,7 @@ function openDocGenerationModal(docType) {
   modal.querySelector('[data-act="cancel"]').onclick = () => { cleanupModalClass(); closeModal(); };
   modalOverlay.onclick = (e) => { if (e.target === modalOverlay) { cleanupModalClass(); closeModal(); } };
 
-  // Dynamic Bill To change — re-render form with new account defaults
+  // Dynamic Bill To change — re-render form with new account defaults (CREATE MODE ONLY)
   const billToSelect = document.getElementById("doc_billTo");
   const refreshTotals = () => {
     const rateEl = document.getElementById("doc_rate");
@@ -14489,18 +14564,29 @@ function openDocGenerationModal(docType) {
     ["doc_rate", "doc_gstRate"].forEach((id) => {
       document.getElementById(id)?.addEventListener("input", refreshTotals);
     });
+    // Theme radios — update currentTheme + selected class visual
+    document.querySelectorAll('input[name="doc_theme"]').forEach((radio) => {
+      radio.addEventListener("change", () => {
+        currentTheme = radio.value;
+        document.querySelectorAll(".doc-theme-opt").forEach((lbl) => {
+          lbl.classList.toggle("selected", lbl.querySelector('input[name="doc_theme"]').checked);
+        });
+      });
+    });
     refreshTotals();
   };
 
-  billToSelect.addEventListener("change", () => {
-    document.getElementById("docFormBody").innerHTML = renderDocForm(billToSelect.value);
-    wireFormFields();
-  });
+  if (!isEdit) {
+    billToSelect.addEventListener("change", () => {
+      document.getElementById("docFormBody").innerHTML = renderDocForm(billToSelect.value);
+      wireFormFields();
+    });
+  }
   wireFormFields();
 
   const confirmBtn = modal.querySelector(".modal-confirm");
   confirmBtn.addEventListener("click", async () => {
-    const accountId = billToSelect.value;
+    const accountId = isEdit ? editDoc.accountId : billToSelect.value;
     const account = renewalAccounts.find((a) => a.id === accountId);
     if (!account) { showToast("Pick a Bill To account first.", true); return; }
 
@@ -14511,40 +14597,50 @@ function openDocGenerationModal(docType) {
     const shipToOverride = document.getElementById("doc_shipTo").value.trim();
     const showPeriod = document.getElementById("doc_showPeriod")?.checked !== false;
     const paymentMode = document.getElementById("doc_payMode")?.value || null;
+    const themeColor = currentTheme;
 
     await runWithBusyButton(confirmBtn, async () => {
       try {
-        // Generate doc number
-        const dateObj = new Date(docDate);
-        let period;
-        if (docType === "R") {
-          // Financial year YY-YY (Apr-Mar)
-          const m = dateObj.getMonth();
-          const y = dateObj.getFullYear();
-          const fyStart = m >= 3 ? y : y - 1;
-          period = `${String(fyStart).slice(-2)}-${String(fyStart + 1).slice(-2)}`;
+        // Doc number: keep original in edit mode, generate new in create mode
+        let docNumber;
+        if (isEdit) {
+          docNumber = editDoc.docNumber;
         } else {
-          // YY/MM
-          period = `${String(dateObj.getFullYear()).slice(-2)}/${String(dateObj.getMonth() + 1).padStart(2, "0")}`;
+          const dateObj = new Date(docDate);
+          let period;
+          if (docType === "R") {
+            const m = dateObj.getMonth();
+            const y = dateObj.getFullYear();
+            const fyStart = m >= 3 ? y : y - 1;
+            period = `${String(fyStart).slice(-2)}-${String(fyStart + 1).slice(-2)}`;
+          } else {
+            period = `${String(dateObj.getFullYear()).slice(-2)}/${String(dateObj.getMonth() + 1).padStart(2, "0")}`;
+          }
+          const num = await getNextDocNumber(docType, period);
+          docNumber = `${docType}/${period}/${String(num).padStart(3, "0")}`;
         }
-        const num = await getNextDocNumber(docType, period);
-        const docNumber = `${docType}/${period}/${String(num).padStart(3, "0")}`;
 
-        // Finalize line items with current rate
-        const finalItems = selectedRenewals.map((r) => {
-          const status = computeRenewalStatus(r);
-          return {
-            renewalId: r.id,
-            plateNumber: r.plateNumber,
-            vehicleName: r.vehicleName,
-            imei: r.imei,
-            simNumber: r.simNumber,
-            year: status.oldestUnpaidYear || status.currentYear,
-            periodStart: formatYMD(status.cycleStart),
-            periodEnd: formatYMD(status.cycleEnd),
-            rate: totals.rate,
-          };
-        });
+        // Line items. Edit mode reuses saved snapshot (period dates, year, etc.),
+        // only rate is refreshed. Create mode computes cycle fresh.
+        const finalItems = isEdit
+          ? selectedRenewals.map((r) => ({
+              ...r._snapshot,
+              rate: totals.rate,
+            }))
+          : selectedRenewals.map((r) => {
+              const status = computeRenewalStatus(r);
+              return {
+                renewalId: r.id,
+                plateNumber: r.plateNumber,
+                vehicleName: r.vehicleName,
+                imei: r.imei,
+                simNumber: r.simNumber,
+                year: status.oldestUnpaidYear || status.currentYear,
+                periodStart: formatYMD(status.cycleStart),
+                periodEnd: formatYMD(status.cycleEnd),
+                rate: totals.rate,
+              };
+            });
 
         // Build HTML
         const html = buildDocumentHTML(docType, {
@@ -14564,9 +14660,10 @@ function openDocGenerationModal(docType) {
           notes,
           shipToAddress: shipToOverride,
           showPeriod,
+          themeColor,
         });
 
-        // Save to DB
+        // Payload
         const docRecord = {
           docType,
           docNumber,
@@ -14583,25 +14680,35 @@ function openDocGenerationModal(docType) {
           hsnCode: hsn,
           gstRate: totals.gstRate,
           paymentMode,
-          linkedPayments: [],
+          linkedPayments: isEdit ? (editDoc.linkedPayments || []) : [],
           notes,
           shipToAddress: shipToOverride,
           htmlSnapshot: html,
-          createdBy: currentUser,
+          themeColor,
+          showPeriod,
+          createdBy: isEdit ? editDoc.createdBy : currentUser,
         };
-        const saved = await createRenewalDocument(docRecord);
-        renewalDocuments.unshift(saved);
+
+        let saved;
+        if (isEdit) {
+          saved = await updateRenewalDocument(editDoc.id, docRecord);
+          const idx = renewalDocuments.findIndex((x) => x.id === editDoc.id);
+          if (idx >= 0) renewalDocuments[idx] = saved;
+        } else {
+          saved = await createRenewalDocument(docRecord);
+          renewalDocuments.unshift(saved);
+        }
 
         cleanupModalClass();
         closeModal();
-        selectedVehicleIds.clear();
-        showToast(`✓ ${docLabel} ${docNumber} created`);
+        if (!isEdit) selectedVehicleIds.clear();
+        showToast(`✓ ${docLabel} ${docNumber} ${isEdit ? 'updated' : 'created'}`);
         openDocumentPrintWindow(html, docNumber);
         render();
       } catch (err) {
         showToast(err.message || "Document generation failed.", true);
       }
-    }, "Generating…");
+    }, isEdit ? "Updating…" : "Generating…");
   });
 }
 
@@ -14614,7 +14721,8 @@ function buildDocumentHTML(docType, d) {
   const acct = d.account || {};
   const sameState = (seller.stateCode || "").trim() === (acct.stateCode || "").trim();
   const amountInWords = numToWords(Math.round(d.total));
-  const theme = DOC_THEMES[seller.themeColor] || DOC_THEMES.classic;
+  // Theme priority: per-doc override (d.themeColor) → seller default → classic
+  const theme = DOC_THEMES[d.themeColor] || DOC_THEMES[seller.themeColor] || DOC_THEMES.classic;
 
   // Ship To — use override if provided, else same as Bill To
   const billToAddr = [acct.address, acct.city, acct.state, acct.pincode].filter(Boolean).join(", ");
