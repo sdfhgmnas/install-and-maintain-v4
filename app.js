@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.9.9";
+const APP_VERSION = "3.9.11";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -14713,32 +14713,61 @@ function openDocGenerationModal(docType, editDoc = null) {
 }
 
 /* ============================================================
-   DOCUMENT HTML BUILDER — v3.9.1
+   DOCUMENT HTML BUILDER — v3.9.10
+   Clean modern layout (ref: billing_app333333.html's .pdoc2 template)
+   Themeable via CSS variables; works for PI / Tax Invoice / Receipt.
    ============================================================ */
 function buildDocumentHTML(docType, d) {
   const typeTitle = { PI: "PROFORMA INVOICE", INV: "TAX INVOICE", R: "RECEIPT" }[docType];
+  const metaLabel = { PI: "Proforma Invoice", INV: "Tax Invoice", R: "Receipt" }[docType];
   const seller = d.seller || {};
   const acct = d.account || {};
-  const sameState = (seller.stateCode || "").trim() === (acct.stateCode || "").trim();
   const amountInWords = numToWords(Math.round(d.total));
   // Theme priority: per-doc override (d.themeColor) → seller default → classic
   const theme = DOC_THEMES[d.themeColor] || DOC_THEMES[seller.themeColor] || DOC_THEMES.classic;
 
   // Ship To — use override if provided, else same as Bill To
-  const billToAddr = [acct.address, acct.city, acct.state, acct.pincode].filter(Boolean).join(", ");
-  const shipTo = (d.shipToAddress && d.shipToAddress.trim()) ? d.shipToAddress.trim() : null;
-
+  const shipToOverride = (d.shipToAddress && d.shipToAddress.trim()) ? d.shipToAddress.trim() : null;
   const showPeriod = d.showPeriod !== false; // default true for legacy docs
+  const applyGst = (d.cgst + d.sgst + d.igst) > 0;
+  const showIgst = d.igst > 0;
+
+  // Billed-To block (also used as "Received From" for receipts)
+  const billedToHtml = `
+    <b class="ph-strong">${escapeHtml(acct.name || "")}</b><br>
+    ${acct.address ? `${escapeHtml(acct.address)}<br>` : ""}
+    ${escapeHtml([acct.city, acct.state, acct.pincode].filter(Boolean).join(", "))}
+    ${acct.gstin ? `<br>GSTIN: <b>${escapeHtml(acct.gstin)}</b>` : ""}
+    ${acct.pan ? `<br>PAN: <b>${escapeHtml(acct.pan)}</b>` : ""}
+    ${acct.phone ? `<br>Phone: <b>${escapeHtml(acct.phone)}</b>` : ""}
+  `;
+
+  const shipToHtml = shipToOverride
+    ? `<b class="ph-strong">${escapeHtml(acct.name || "")}</b><br>${escapeHtml(shipToOverride).replace(/\n/g, "<br>")}`
+    : null;
+
+  // Items table
   const itemsHtml = d.lineItems.map((li, i) => `
     <tr>
-      <td>${i + 1}</td>
-      <td>${escapeHtml(li.plateNumber)}<br><span class="small">${escapeHtml(li.vehicleName || "")}</span></td>
-      <td class="mono small">${escapeHtml(li.imei)}</td>
-      <td class="mono small">${escapeHtml(d.hsnCode || "")}</td>
-      ${showPeriod ? `<td class="small">${formatDateIndian(li.periodStart)} → ${formatDateIndian(li.periodEnd)}</td>` : ""}
-      <td class="right">₹${Number(li.rate).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+      <td style="text-align:center;">${i + 1}</td>
+      <td>
+        <b class="ph-strong">${escapeHtml(li.plateNumber)}</b>
+        ${li.vehicleName ? `<br><span class="ph-item-sub">${escapeHtml(li.vehicleName)}</span>` : ""}
+      </td>
+      <td class="mono" style="font-size:8.5px;">${escapeHtml(li.imei || "")}</td>
+      <td class="mono" style="font-size:8.5px;text-align:center;">${escapeHtml(d.hsnCode || "")}</td>
+      ${showPeriod ? `<td class="ph-item-sub" style="font-size:8.3px;">${formatDateIndian(li.periodStart)}<br>→ ${formatDateIndian(li.periodEnd)}</td>` : ""}
+      <td style="text-align:right;">₹${Number(li.rate).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
     </tr>
   `).join("");
+
+  // Terms block — fall back to generic text per doc type
+  const defaultTerms = {
+    PI:  "Payment terms: Payment is due within 7 days from the invoice date unless otherwise agreed in writing.\n\nThe charges listed are for GPS SIM subscription renewal for the vehicles listed above.\n\nAny additional service outside the agreed scope will be billed separately.",
+    INV: "Payment terms: Payment is due within 7 days from the invoice date unless otherwise agreed in writing.\n\nThe charges listed are for GPS SIM subscription renewal for the vehicles listed above.\n\nAll disputes subject to local jurisdiction.",
+    R:   "Received the above amount towards GPS SIM subscription renewal for the listed vehicles. Subject to realisation of the instrument where applicable.",
+  }[docType];
+  const termsText = seller.termsText || defaultTerms;
 
   return `<!doctype html>
 <html>
@@ -14746,7 +14775,7 @@ function buildDocumentHTML(docType, d) {
 <meta charset="utf-8">
 <title>${typeTitle} — ${d.docNumber}</title>
 <style>
-  @page { size: A4; margin: 12mm; }
+  @page { size: A4; margin: 0; background: #fff; }
   * {
     box-sizing: border-box;
     margin: 0;
@@ -14755,70 +14784,174 @@ function buildDocumentHTML(docType, d) {
     print-color-adjust: exact !important;
     color-adjust: exact !important;
   }
+  html, body { background: #f1f5f9; }
   body {
-    font-family: Arial, Helvetica, sans-serif;
-    color: #000;
-    font-size: 11px;
-    line-height: 1.4;
+    font-family: 'Calibri', 'Carlito', Arial, Helvetica, sans-serif;
+    color: #1a2430;
+    font-size: 10.7px;
+    line-height: 1.45;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }
-  .doc-wrap { max-width: 100%; }
-  .doc-title { text-align: center; font-size: 16px; font-weight: 700; letter-spacing: 3px; padding: 12px; background: ${theme.primary}; color: ${theme.fg}; margin-bottom: 10px; border-radius: 2px; border: 1.5px solid ${theme.accent}; }
-  .header-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; border: 2px solid ${theme.accent}; }
-  .header-tbl td { padding: 10px 12px; vertical-align: top; }
-  .header-tbl td:first-child { border-right: 2px solid ${theme.accent}; }
-  .seller-name { font-size: 17px; font-weight: 800; color: ${theme.accent}; letter-spacing: 0.5px; margin-bottom: 4px; }
-  .doc-meta { text-align: right; }
-  .doc-meta div { margin-bottom: 2px; }
-  .doc-meta strong { font-size: 12px; color: ${theme.accent}; }
-  .logo-img { max-height: 55px; max-width: 160px; margin-bottom: 6px; }
 
-  .parties { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
-  .parties td { width: 50%; padding: 10px 12px; vertical-align: top; border: 1px solid ${theme.accent}; }
-  .parties td:first-child { background: #f9fafb; }
-  .party-label { font-size: 10px; color: ${theme.fg}; background: ${theme.primary}; display: inline-block; padding: 3px 10px; border-radius: 3px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; font-weight: 700; border: 1px solid ${theme.accent}; }
-  .party-name { font-weight: 800; font-size: 12.5px; color: ${theme.accent}; margin-bottom: 3px; }
-
-  .items-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; border: 1px solid ${theme.accent}; }
-  .items-tbl th, .items-tbl td { padding: 7px 8px; border: 1px solid ${theme.accent}; text-align: left; font-size: 10px; }
-  .items-tbl th { background: ${theme.primary}; color: ${theme.fg}; font-weight: 700; text-transform: uppercase; font-size: 9px; letter-spacing: 0.5px; }
-  .items-tbl tr:nth-child(even) td { background: #f9fafb; }
-  .items-tbl .right { text-align: right; }
-  .items-tbl .small { font-size: 9px; color: #475569; }
-  .mono { font-family: 'Courier New', monospace; }
-
-  .totals-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; border: 1px solid ${theme.accent}; }
-  .totals-tbl td { padding: 7px 12px; border: 1px solid ${theme.accent}; font-size: 11px; }
-  .totals-tbl .label { text-align: right; width: 70%; font-weight: 600; background: #f9fafb; }
-  .totals-tbl .value { text-align: right; width: 30%; font-weight: 700; }
-  .totals-tbl .grand-total td { background: ${theme.primary}; color: ${theme.fg}; font-weight: 800; font-size: 14px; letter-spacing: 0.5px; border-top: 2px solid ${theme.accent}; border-bottom: 2px solid ${theme.accent}; }
-
-  .words-row { padding: 8px 12px; border: 1px solid ${theme.accent}; font-size: 10.5px; margin-bottom: 10px; background: #fef9c3; border-left: 4px solid ${theme.accent}; }
-  .words-row strong { font-style: italic; color: ${theme.accent}; }
-
-  .bank-sig { width: 100%; border-collapse: collapse; margin-bottom: 10px; border: 1px solid ${theme.accent}; }
-  .bank-sig td { border: 1px solid ${theme.accent}; padding: 10px 12px; vertical-align: top; width: 50%; }
-  .bank-sig td:first-child { background: #f0f9ff; }
-  .bank-sig .mini-label { font-size: 10px; color: ${theme.fg}; background: ${theme.primary}; display: inline-block; padding: 2px 8px; border-radius: 3px; margin-bottom: 6px; font-weight: 700; letter-spacing: 0.5px; border: 1px solid ${theme.accent}; }
-
-  .terms { padding: 10px 12px; border: 1px solid ${theme.accent}; font-size: 9px; margin-bottom: 10px; border-left: 4px solid ${theme.accent}; background: #f8fafc; }
-  .terms h4 { font-size: 10px; margin-bottom: 4px; color: ${theme.accent}; }
-
-  .sig-area { text-align: right; padding-top: 20px; }
-  .electronic-note { font-size: 10.5px; font-style: italic; color: ${theme.accent}; text-align: center; padding: 10px; border: 1.5px dashed ${theme.accent}; margin: 10px 0; background: ${theme.primary}; border-radius: 4px; font-weight: 600; }
-
+  /* Non-printable toolbar */
   .no-print { padding: 12px 14px; background: ${theme.primary}; color: ${theme.fg}; border-bottom: 2px solid ${theme.accent}; }
-  .no-print-title { font-weight: 800; margin-bottom: 6px; font-size: 13px; color: ${theme.accent}; }
-  .no-print button { background: white; color: ${theme.accent}; border: 1.5px solid ${theme.accent}; padding: 7px 14px; border-radius: 4px; font-weight: 700; cursor: pointer; margin: 4px 4px 0 0; font-size: 12px; }
+  .no-print-title { font-weight: 800; margin-bottom: 6px; font-size: 13px; color: ${theme.accent}; letter-spacing: 0.3px; }
+  .no-print button { background: #fff; color: ${theme.accent}; border: 1.5px solid ${theme.accent}; padding: 7px 14px; border-radius: 4px; font-weight: 700; cursor: pointer; margin: 4px 4px 0 0; font-size: 12px; }
   .no-print-hint { font-size: 11px; background: rgba(255,255,255,0.6); padding: 8px 10px; border-radius: 4px; margin-top: 6px; line-height: 1.5; color: #0f172a; }
   .no-print-hint strong { font-weight: 700; }
-  @media print { .no-print { display: none !important; } }
+  @media print { .no-print { display: none !important; } html, body { background: #fff !important; } }
+
+  /* Document — themeable via CSS variables */
+  .pdoc2 {
+    --ph-primary: ${theme.accent};
+    --ph-border: ${theme.accent};
+    --ph-border-w: 1px;
+    --ph-header-bg: ${theme.primary};
+    --ph-header-text: ${theme.fg};
+    --ph-transform: uppercase;
+    font-family: 'Calibri', 'Carlito', Arial, sans-serif;
+    color: #1a2430;
+    padding: 30px 34px 40px;
+    max-width: 840px;
+    margin: 0 auto;
+    font-size: 10.7px;
+    line-height: 1.45;
+    background: #fff;
+    text-transform: var(--ph-transform);
+    min-height: 100vh;
+  }
+  .pdoc2 table { border-collapse: collapse; width: 100%; font-family: inherit; }
+  .pdoc2 b { font-weight: 400; }
+
+  .ph-headrow td { vertical-align: top; padding: 0; }
+  .ph-logo { height: 86px; max-width: 320px; object-fit: contain; display: block; margin-bottom: 6px; }
+  .ph-bizname { font-size: 19.5px; font-weight: 700; color: var(--ph-primary); letter-spacing: -0.01em; }
+  .ph-bizmeta { font-size: 9px; line-height: 1.6; color: #334155; margin-top: 4px; text-transform: none; }
+  .ph-doctitle { font-size: 15.5px; font-weight: 400; color: var(--ph-primary); letter-spacing: -0.005em; }
+
+  .ph-outline-wrap {
+    margin-top: 16px;
+    border-left: var(--ph-border-w) solid var(--ph-border);
+    border-right: var(--ph-border-w) solid var(--ph-border);
+  }
+
+  .ph-info {
+    margin-top: 0;
+    border-top: var(--ph-border-w) solid var(--ph-border);
+    border-bottom: var(--ph-border-w) solid var(--ph-border);
+  }
+  .ph-info td {
+    border-right: var(--ph-border-w) solid var(--ph-border);
+    padding: 12px 14px;
+    font-size: 10px;
+    vertical-align: top;
+  }
+  .ph-info td:last-child { border-right: none; }
+  .ph-info-col { width: 24%; }
+  .ph-info-col > div { margin-bottom: 9px; }
+  .ph-label { color: #5B6B7A; font-size: 8px; letter-spacing: 0.05em; font-weight: 400; }
+  .ph-box { width: 38%; font-size: 8.8px; line-height: 1.55; }
+  .ph-box-billed { font-size: 7.8px; line-height: 1.5; }
+  .ph-box-label { font-weight: 700; font-size: 11.5px; margin-bottom: 7px; color: var(--ph-primary); letter-spacing: 0.03em; }
+  .ph-sub-label { font-weight: 700; font-size: 9.5px; margin-top: 9px; margin-bottom: 4px; color: var(--ph-primary); letter-spacing: 0.03em; }
+
+  .ph-spacer-row { width: 100%; }
+  .ph-spacer-row td { height: 16px; padding: 0; border: none; }
+
+  .ph-items {
+    margin-top: 0;
+    border-top: var(--ph-border-w) solid var(--ph-border);
+    border-bottom: var(--ph-border-w) solid var(--ph-border);
+  }
+  .ph-items th, .ph-items td {
+    border: var(--ph-border-w) solid var(--ph-border);
+    padding: 7px 8px;
+    font-size: 9.3px;
+    vertical-align: top;
+  }
+  .ph-items th {
+    background: var(--ph-header-bg);
+    color: var(--ph-header-text);
+    text-align: left;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    font-size: 8px;
+  }
+  .ph-item-sub { color: #475569; font-weight: 400; text-transform: none; }
+  .mono { font-family: 'Courier New', monospace; }
+
+  .ph-stack-totals {
+    width: auto;
+    margin-left: auto;
+    margin-top: 0;
+    border: var(--ph-border-w) solid var(--ph-border);
+    border-top: none;
+    max-width: 320px;
+  }
+  .ph-stack-totals td {
+    padding: 6px 12px;
+    font-size: 10px;
+    border-top: 1px solid #ddd;
+    font-weight: 400;
+  }
+  .ph-stack-totals td:last-child { text-align: right; font-weight: 700; }
+  .ph-stack-totals tr.strong td { border-top: 1.5px solid var(--ph-border); font-weight: 700; }
+  .ph-stack-totals tr.grand td {
+    background: var(--ph-header-bg);
+    color: var(--ph-primary);
+    font-weight: 800;
+    font-size: 11.5px;
+    border-top: 1.5px solid var(--ph-border);
+    border-bottom: 1.5px solid var(--ph-border);
+  }
+
+  .ph-terms-bank { margin-top: 16px; border: var(--ph-border-w) solid var(--ph-border); }
+  .ph-terms-bank td {
+    border-right: var(--ph-border-w) solid var(--ph-border);
+    padding: 12px 14px;
+    vertical-align: top;
+    width: 50%;
+    font-size: 9px;
+    line-height: 1.6;
+  }
+  .ph-terms-bank td:last-child { border-right: none; }
+  .ph-terms-body { white-space: pre-line; text-transform: none; }
+
+  .ph-amount-words {
+    font-size: 9.5px;
+    font-weight: 700;
+    margin-top: 8px;
+    color: var(--ph-primary);
+    letter-spacing: 0.02em;
+  }
+
+  .ph-notes {
+    margin-top: 10px;
+    padding: 10px 14px;
+    border: 1px dashed var(--ph-border);
+    background: #fafbfc;
+    font-size: 9px;
+    text-transform: none;
+    color: #334155;
+  }
+  .ph-notes b { font-weight: 700; color: var(--ph-primary); text-transform: uppercase; letter-spacing: 0.04em; }
+
+  .ph-footer { margin-top: 34px; text-align: center; }
+  .ph-electronic-note {
+    font-size: 9px;
+    color: #64748b;
+    text-transform: none;
+    letter-spacing: 0.02em;
+    padding: 10px;
+    border-top: 1px solid #e2e8f0;
+  }
 </style>
 </head>
 <body>
+
 <div class="no-print">
-  <div class="no-print-title">${typeTitle} · ${d.docNumber}</div>
+  <div class="no-print-title">${typeTitle} · ${escapeHtml(d.docNumber)}</div>
   <button onclick="window.print()">🖨 Print / Save as PDF</button>
   <button onclick="window.close()">✕ Close</button>
   <div class="no-print-hint">
@@ -14827,143 +14960,158 @@ function buildDocumentHTML(docType, d) {
   </div>
 </div>
 
-<div class="doc-wrap">
-  <div class="doc-title">${typeTitle}</div>
-
-  <table class="header-tbl">
+<div class="pdoc2">
+  <!-- Header: biz name/logo (left) + doc title (right) -->
+  <table class="ph-headrow">
     <tr>
-      <td style="width: 60%;">
-        ${seller.logoUrl ? `<img src="${escapeHtml(seller.logoUrl)}" class="logo-img" alt="Logo" />` : ""}
-        <div class="seller-name">${escapeHtml(seller.businessName || "")}</div>
-        <div>${escapeHtml(seller.address || "")}</div>
-        <div>${escapeHtml([seller.city, seller.state, seller.pincode].filter(Boolean).join(", "))}</div>
-        ${seller.gstin ? `<div><strong>GSTIN:</strong> ${escapeHtml(seller.gstin)}</div>` : ""}
-        ${seller.pan ? `<div><strong>PAN:</strong> ${escapeHtml(seller.pan)}</div>` : ""}
-        ${seller.contactPhone || seller.contactEmail ? `<div>${[seller.contactPhone, seller.contactEmail].filter(Boolean).map(escapeHtml).join(" · ")}</div>` : ""}
+      <td style="width:60%;">
+        ${seller.logoUrl
+          ? `<img src="${escapeHtml(seller.logoUrl)}" class="ph-logo" alt="Logo">
+             <div class="ph-bizname">${escapeHtml(seller.businessName || "")}</div>`
+          : `<div class="ph-bizname">${escapeHtml(seller.businessName || "")}</div>`}
       </td>
-      <td style="width: 40%;" class="doc-meta">
-        <div><strong>${docType === "R" ? "Receipt" : docType === "PI" ? "PI" : "Invoice"} No:</strong><br>${escapeHtml(d.docNumber)}</div>
-        <div style="margin-top: 6px;"><strong>Date:</strong><br>${formatDateIndian(d.docDate)}</div>
-        ${docType === "PI" ? '<div style="margin-top: 6px;"><strong>Valid for:</strong><br>30 days</div>' : ""}
+      <td style="width:40%; text-align:right; vertical-align:top;">
+        <div class="ph-doctitle">${typeTitle}</div>
       </td>
     </tr>
   </table>
 
-  <table class="parties">
-    <tr>
-      <td>
-        <div class="party-label">${docType === "R" ? "RECEIVED FROM" : "BILL TO"}</div>
-        <div class="party-name">${escapeHtml(acct.name)}</div>
-        ${acct.address ? `<div>${escapeHtml(acct.address)}</div>` : ""}
-        <div>${escapeHtml([acct.city, acct.state, acct.pincode].filter(Boolean).join(", "))}</div>
-        ${acct.gstin ? `<div><strong>GSTIN:</strong> ${escapeHtml(acct.gstin)}</div>` : ""}
-        ${acct.pan ? `<div><strong>PAN:</strong> ${escapeHtml(acct.pan)}</div>` : ""}
-        ${acct.phone ? `<div>${escapeHtml(acct.phone)}</div>` : ""}
-      </td>
-      <td>
-        <div class="party-label">SHIP TO</div>
-        <div class="party-name">${escapeHtml(acct.name)}</div>
-        ${shipTo ? `<div>${escapeHtml(shipTo).replace(/\n/g, "<br>")}</div>` : `
-          ${acct.address ? `<div>${escapeHtml(acct.address)}</div>` : ""}
-          <div>${escapeHtml([acct.city, acct.state, acct.pincode].filter(Boolean).join(", "))}</div>
-        `}
-        ${acct.gstin ? `<div style="margin-top: 4px;"><strong>GSTIN:</strong> ${escapeHtml(acct.gstin)}</div>` : ""}
-      </td>
-    </tr>
-  </table>
+  <!-- Outlined block: info strip + items -->
+  <div class="ph-outline-wrap">
 
-  <table class="items-tbl">
-    <thead>
+    <!-- 3-column info: metadata / Billed By (seller) / Billed To (customer) -->
+    <table class="ph-info">
       <tr>
-        <th>#</th>
-        <th>Vehicle</th>
-        <th>IMEI</th>
-        <th>HSN/SAC</th>
-        ${showPeriod ? '<th>Period</th>' : ''}
-        <th class="right">Amount</th>
+        <td class="ph-info-col">
+          <div>
+            <span class="ph-label">${metaLabel} No #</span><br>
+            <b class="ph-strong">${escapeHtml(d.docNumber)}</b>
+          </div>
+          <div>
+            <span class="ph-label">${metaLabel} Date</span><br>
+            <b class="ph-strong">${formatDateIndian(d.docDate)}</b>
+          </div>
+          ${docType === "PI" ? `
+            <div>
+              <span class="ph-label">Valid Until</span><br>
+              <b class="ph-strong">30 days from issue</b>
+            </div>` : ""}
+          ${docType === "R" && d.paymentMode ? `
+            <div>
+              <span class="ph-label">Payment Mode</span><br>
+              <b class="ph-strong">${escapeHtml(d.paymentMode.toUpperCase())}</b>
+            </div>` : ""}
+        </td>
+
+        <td class="ph-box ph-box-billed">
+          <div class="ph-box-label">Billed By</div>
+          <b class="ph-strong">${escapeHtml(seller.businessName || "")}</b><br>
+          ${seller.address ? `${escapeHtml(seller.address)}<br>` : ""}
+          ${escapeHtml([seller.city, seller.state, seller.pincode].filter(Boolean).join(", "))}
+          ${seller.gstin ? `<br>GSTIN: <b>${escapeHtml(seller.gstin)}</b>` : ""}
+          ${seller.pan ? `<br>PAN: <b>${escapeHtml(seller.pan)}</b>` : ""}
+          ${seller.contactPhone ? `<br>Phone: <b>${escapeHtml(seller.contactPhone)}</b>` : ""}
+          ${seller.contactEmail ? `<br>Email: <b>${escapeHtml(seller.contactEmail)}</b>` : ""}
+        </td>
+
+        <td class="ph-box ph-box-billed">
+          <div class="ph-box-label">${docType === "R" ? "Received From" : "Billed To"}</div>
+          ${billedToHtml}
+          ${shipToHtml ? `
+            <div class="ph-sub-label">Ship To</div>
+            ${shipToHtml}` : ""}
+        </td>
       </tr>
-    </thead>
-    <tbody>${itemsHtml}</tbody>
+    </table>
+
+    <table class="ph-spacer-row"><tr><td>&nbsp;</td></tr></table>
+
+    <!-- Items -->
+    <table class="ph-items">
+      <thead>
+        <tr>
+          <th style="width:22px; text-align:center;">#</th>
+          <th>Vehicle</th>
+          <th>IMEI</th>
+          <th style="text-align:center;">HSN/SAC</th>
+          ${showPeriod ? `<th>Subscription Period</th>` : ""}
+          <th style="text-align:right;">Rate / Amount (₹)</th>
+        </tr>
+      </thead>
+      <tbody>${itemsHtml}</tbody>
+    </table>
+
+  </div><!-- /.ph-outline-wrap -->
+
+  <!-- Right-aligned stack totals -->
+  <table class="ph-stack-totals">
+    <tr>
+      <td>${applyGst ? "Amount (Taxable)" : "Amount"}</td>
+      <td>₹${d.subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+    </tr>
+    ${applyGst && !showIgst ? `
+      <tr>
+        <td>CGST @ ${d.gstRate / 2}%</td>
+        <td>₹${d.cgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+      </tr>
+      <tr>
+        <td>SGST @ ${d.gstRate / 2}%</td>
+        <td>₹${d.sgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+      </tr>` : ""}
+    ${applyGst && showIgst ? `
+      <tr>
+        <td>IGST @ ${d.gstRate}%</td>
+        <td>₹${d.igst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+      </tr>` : ""}
+    <tr class="grand">
+      <td>${docType === "R" ? "Total Received (INR)" : "Total (INR)"}</td>
+      <td>₹${d.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+    </tr>
   </table>
 
-  <table class="totals-tbl">
-    <tr>
-      <td class="label">Subtotal</td>
-      <td class="value">₹${d.subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-    </tr>
-    ${d.cgst > 0 ? `
-    <tr>
-      <td class="label">CGST @ ${d.gstRate / 2}%</td>
-      <td class="value">₹${d.cgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-    </tr>
-    <tr>
-      <td class="label">SGST @ ${d.gstRate / 2}%</td>
-      <td class="value">₹${d.sgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-    </tr>
-    ` : ""}
-    ${d.igst > 0 ? `
-    <tr>
-      <td class="label">IGST @ ${d.gstRate}%</td>
-      <td class="value">₹${d.igst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-    </tr>
-    ` : ""}
-    <tr class="grand-total">
-      <td class="label">GRAND TOTAL</td>
-      <td class="value">₹${d.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-    </tr>
-  </table>
-
-  <div class="words-row">
-    <strong>Amount in words:</strong> ${escapeHtml(amountInWords)} Rupees Only
-  </div>
-
-  ${docType === "R" && d.paymentMode ? `
-  <div class="words-row" style="background: #ecfdf5;">
-    <strong>Payment Mode:</strong> ${escapeHtml(d.paymentMode.toUpperCase())}
-  </div>
-  ` : ""}
-
-  <table class="bank-sig">
+  <!-- Terms + Bank -->
+  <table class="ph-terms-bank">
     <tr>
       <td>
-        ${docType === "PI" ? `
-          <div class="mini-label">BANK DETAILS (for payment)</div>
-          <div><strong>${escapeHtml(seller.bankName || "")}</strong></div>
-          <div>A/c Holder: ${escapeHtml(seller.bankAccountHolder || "")}</div>
-          <div>A/c No: <span class="mono">${escapeHtml(seller.bankAccountNo || "")}</span></div>
-          <div>IFSC: <span class="mono">${escapeHtml(seller.bankIfsc || "")}</span></div>
-          <div>Account Type: Current</div>
-        ` : docType === "R" ? `
-          <div class="mini-label">RECEIVED WITH THANKS</div>
-          <div style="margin-top: 10px; font-size: 10px;">Received the sum of <strong>₹${d.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong> towards SIM subscription renewal for the vehicles listed above.</div>
-        ` : `
-          <div class="mini-label">DECLARATION</div>
-          <div style="font-size: 9px; margin-top: 4px;">We declare that this invoice shows the actual price of the goods/services described and that all particulars are true and correct.</div>
-        `}
+        <div class="ph-box-label">Terms and Conditions</div>
+        <div class="ph-terms-body">${escapeHtml(termsText)}</div>
       </td>
-      <td class="sig-area">
-        <div style="font-size: 10px; font-weight: 600;">For <strong>${escapeHtml(seller.businessName || "")}</strong></div>
+      <td>
+        <div class="ph-box-label">${docType === "R" ? "Received With Thanks" : "Bank Details"}</div>
+        ${docType === "R" ? `
+          <div style="text-transform:none; font-size:9px; line-height:1.6;">
+            Received the sum of <b style="font-weight:700;">₹${d.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</b>
+            (${escapeHtml(amountInWords)} Rupees Only)
+            towards GPS SIM subscription renewal for the vehicles listed above${d.paymentMode ? ` via <b style="font-weight:700;">${escapeHtml(d.paymentMode.toUpperCase())}</b>` : ""}.
+          </div>
+        ` : `
+          <div style="text-transform:none; font-size:9px; line-height:1.7;">
+            Account Name &nbsp;·&nbsp; <b style="font-weight:700;">${escapeHtml(seller.bankAccountHolder || seller.businessName || "")}</b><br>
+            Account Number &nbsp;·&nbsp; <b style="font-weight:700;">${escapeHtml(seller.bankAccountNo || "—")}</b><br>
+            IFSC &nbsp;·&nbsp; <b style="font-weight:700;">${escapeHtml(seller.bankIfsc || "—")}</b><br>
+            Account Type &nbsp;·&nbsp; <b style="font-weight:700;">Current</b><br>
+            Bank &nbsp;·&nbsp; <b style="font-weight:700;">${escapeHtml(seller.bankName || "—")}</b>
+          </div>
+        `}
       </td>
     </tr>
   </table>
 
-  <div class="electronic-note">
-    This is an electronically generated document, no signature is required.
+  <!-- Amount in words -->
+  <div class="ph-amount-words">
+    Amount In Words: ${escapeHtml(amountInWords.toUpperCase())} RUPEES ONLY
   </div>
-
-  ${seller.termsText ? `
-  <div class="terms">
-    <h4>TERMS & CONDITIONS</h4>
-    <div>${escapeHtml(seller.termsText).replace(/\n/g, "<br>")}</div>
-  </div>
-  ` : ""}
 
   ${d.notes ? `
-  <div class="terms">
-    <h4>NOTES</h4>
-    <div>${escapeHtml(d.notes).replace(/\n/g, "<br>")}</div>
+  <div class="ph-notes">
+    <b>Notes:</b> ${escapeHtml(d.notes).replace(/\n/g, "<br>")}
+  </div>` : ""}
+
+  <!-- Electronic footer -->
+  <div class="ph-footer">
+    <p class="ph-electronic-note">This is an electronically generated document, no signature is required.</p>
   </div>
-  ` : ""}
+
 </div>
 </body>
 </html>`;
