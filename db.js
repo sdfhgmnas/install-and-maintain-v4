@@ -1223,6 +1223,7 @@ function rowToSellerProfile(row) {
     signatureName: row.signature_name || "",
     signatureDesignation: row.signature_designation || "",
     termsText: row.terms_text || "",
+    themeColor: row.theme_color || "classic",
     updatedAt: row.updated_at,
     updatedBy: row.updated_by,
   };
@@ -1250,6 +1251,7 @@ function sellerProfileToRow(p) {
     signature_name: p.signatureName || null,
     signature_designation: p.signatureDesignation || null,
     terms_text: p.termsText || null,
+    theme_color: p.themeColor || "classic",
     updated_by: p.updatedBy || null,
   };
 }
@@ -1308,6 +1310,7 @@ function rowToDocument(row) {
     paymentMode: row.payment_mode || "",
     linkedPayments: row.linked_payments || [],
     notes: row.notes || "",
+    shipToAddress: row.ship_to_address || "",
     htmlSnapshot: row.html_snapshot || "",
     createdAt: row.created_at,
     createdBy: row.created_by,
@@ -1361,6 +1364,7 @@ async function createRenewalDocument(doc) {
     payment_mode: doc.paymentMode || null,
     linked_payments: doc.linkedPayments || [],
     notes: doc.notes || null,
+    ship_to_address: doc.shipToAddress || null,
     html_snapshot: doc.htmlSnapshot || null,
     created_by: doc.createdBy || null,
   };

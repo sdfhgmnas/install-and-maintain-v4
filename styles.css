@@ -10900,3 +10900,84 @@ button.clickable-card:focus-visible {
   color: #0891b2;
 }
 
+
+/* ============================================================
+   v3.9.1 — Logo upload + Theme picker
+   ============================================================ */
+
+.logo-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.3rem;
+}
+
+.logo-preview {
+  max-height: 60px;
+  max-width: 180px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 4px;
+  background: #fff;
+}
+
+.logo-placeholder {
+  width: 90px;
+  height: 60px;
+  border: 2px dashed #cbd5e1;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+.theme-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+
+.theme-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  border: 2px solid #e2e8f0;
+  border-radius: 8px;
+  cursor: pointer;
+  background: #fff;
+  transition: all 0.15s;
+}
+
+.theme-option:hover {
+  border-color: #94a3b8;
+}
+
+.theme-option.selected {
+  border-color: #0891b2;
+  background: #ecfeff;
+  box-shadow: 0 0 0 2px rgba(8, 145, 178, 0.2);
+}
+
+.theme-option input[type="radio"] {
+  width: 14px;
+  height: 14px;
+  accent-color: #0891b2;
+}
+
+.theme-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.theme-name {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #0f172a;
+}

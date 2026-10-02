@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.9.0";
+const APP_VERSION = "3.9.1";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -13474,8 +13474,18 @@ function exportRenewalsToExcel(list) {
 }
 
 /* ============================================================
-   v3.9.0 — SUB-NAV, ACCOUNTS, SETTINGS, DOCUMENTS
+   v3.9.0+ — SUB-NAV, ACCOUNTS, SETTINGS, DOCUMENTS
    ============================================================ */
+
+// Theme presets for documents
+const DOC_THEMES = {
+  classic:  { label: "Classic", primary: "#000000", accent: "#333333", fg: "#ffffff" },
+  teal:     { label: "Teal",    primary: "#0e7490", accent: "#083344", fg: "#ffffff" },
+  blue:     { label: "Blue",    primary: "#1e40af", accent: "#1e3a8a", fg: "#ffffff" },
+  burgundy: { label: "Burgundy",primary: "#991b1b", accent: "#7f1d1d", fg: "#ffffff" },
+  green:    { label: "Green",   primary: "#166534", accent: "#14532d", fg: "#ffffff" },
+  purple:   { label: "Purple",  primary: "#6b21a8", accent: "#581c87", fg: "#ffffff" },
+};
 
 function renderRenewalSubNav(activeKey, isAdmin) {
   const items = [
@@ -13925,17 +13935,39 @@ function renderRenewalSettingsSubPage() {
             </div>
           </div>
 
-          <h3 style="margin-top: 1rem; color: #475569;">Signature & Terms</h3>
-          <div class="form-row-grid">
-            <div class="form-row">
-              <label>Signatory Name</label>
-              <input type="text" id="sp_sigName" value="${escapeHtml(p.signatureName || '')}" placeholder="e.g. Abhinav Mishra" />
+          <h3 style="margin-top: 1rem; color: #475569;">Branding — Logo & Theme</h3>
+
+          <div class="form-row">
+            <label>Company Logo (shown on all documents)</label>
+            <div class="logo-upload-row">
+              ${p.logoUrl ? `<img src="${escapeHtml(p.logoUrl)}" class="logo-preview" alt="Logo" />` : '<div class="logo-placeholder">No logo</div>'}
+              <input type="file" id="sp_logoFile" accept="image/*" style="display:none;" />
+              <button type="button" class="btn btn-outline btn-sm" id="sp_uploadLogoBtn">📷 Upload Logo</button>
+              ${p.logoUrl ? '<button type="button" class="btn btn-outline btn-sm" id="sp_removeLogoBtn">🗑 Remove</button>' : ''}
             </div>
-            <div class="form-row">
-              <label>Designation</label>
-              <input type="text" id="sp_sigDesig" value="${escapeHtml(p.signatureDesignation || '')}" placeholder="e.g. Proprietor" />
+            <input type="hidden" id="sp_logoUrl" value="${escapeHtml(p.logoUrl || '')}" />
+            <p class="field-hint">Recommended: Square image, max 500KB. Will be shown at top-left of documents.</p>
+          </div>
+
+          <div class="form-row">
+            <label>Document Theme Color</label>
+            <div class="theme-picker">
+              ${['classic', 'teal', 'blue', 'burgundy', 'green', 'purple'].map((t) => {
+                const meta = DOC_THEMES[t];
+                return `
+                  <label class="theme-option ${(p.themeColor || 'classic') === t ? 'selected' : ''}">
+                    <input type="radio" name="sp_theme" value="${t}" ${(p.themeColor || 'classic') === t ? 'checked' : ''} />
+                    <span class="theme-swatch" style="background: ${meta.primary};"></span>
+                    <span class="theme-name">${meta.label}</span>
+                  </label>
+                `;
+              }).join("")}
             </div>
           </div>
+
+          <h3 style="margin-top: 1rem; color: #475569;">Terms (signature not needed — docs are electronic)</h3>
+          <input type="hidden" id="sp_sigName" value="" />
+          <input type="hidden" id="sp_sigDesig" value="" />
           <div class="form-row">
             <label>Terms & Conditions (shown on PI)</label>
             <textarea id="sp_terms" rows="3" placeholder="e.g. Payment due within 7 days. Subject to Raipur jurisdiction.">${escapeHtml(p.termsText || '')}</textarea>
@@ -13953,10 +13985,49 @@ function renderRenewalSettingsSubPage() {
   bindRenewalSubNav();
   bindLogout();
 
+  // Logo upload handler
+  document.getElementById("sp_uploadLogoBtn")?.addEventListener("click", () => {
+    document.getElementById("sp_logoFile")?.click();
+  });
+  document.getElementById("sp_logoFile")?.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (file.size > 500 * 1024) { showToast("Logo too large (max 500KB)", true); return; }
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      document.getElementById("sp_logoUrl").value = dataUrl;
+      showToast("✓ Logo loaded — click 💾 Save to persist");
+      render();
+    } catch (err) {
+      showToast("Logo upload failed", true);
+    }
+  });
+  document.getElementById("sp_removeLogoBtn")?.addEventListener("click", () => {
+    document.getElementById("sp_logoUrl").value = "";
+    showToast("Logo removed — click 💾 Save to persist");
+    render();
+  });
+
+  // Theme radio handlers (visual feedback only, saved on Save click)
+  modal?.querySelectorAll('input[name="sp_theme"]').forEach(() => {}); // no-op; app-level
+  app.querySelectorAll('input[name="sp_theme"]').forEach((rb) => {
+    rb.addEventListener("change", () => {
+      app.querySelectorAll(".theme-option").forEach((o) => o.classList.remove("selected"));
+      rb.closest(".theme-option")?.classList.add("selected");
+    });
+  });
+
   document.getElementById("saveSellerProfileBtn")?.addEventListener("click", async (e) => {
     const btn = e.currentTarget;
     const name = document.getElementById("sp_businessName").value.trim();
     if (!name) { showToast("Business name required.", true); return; }
+    const selectedTheme = app.querySelector('input[name="sp_theme"]:checked')?.value || "classic";
     const payload = {
       id: p.id,
       businessName: name,
@@ -13974,10 +14045,12 @@ function renderRenewalSettingsSubPage() {
       bankAccountHolder: document.getElementById("sp_bankHolder").value.trim(),
       bankAccountNo: document.getElementById("sp_bankAccount").value.trim(),
       bankIfsc: document.getElementById("sp_bankIfsc").value.trim(),
-      bankBranch: document.getElementById("sp_bankBranch").value.trim(),
+      bankBranch: document.getElementById("sp_bankBranch").value.trim(),  // keeps old field; template now uses "Current" instead
       signatureName: document.getElementById("sp_sigName").value.trim(),
       signatureDesignation: document.getElementById("sp_sigDesig").value.trim(),
       termsText: document.getElementById("sp_terms").value.trim(),
+      logoUrl: document.getElementById("sp_logoUrl").value,
+      themeColor: selectedTheme,
       updatedBy: currentUser,
     };
     await runWithBusyButton(btn, async () => {
@@ -14143,91 +14216,123 @@ function openDocGenerationModal(docType) {
     return;
   }
 
-  // Get selected vehicles
+  if (renewalAccounts.length === 0) {
+    showToast("⚠️ Create at least one customer account first (Accounts tab).", true);
+    return;
+  }
+
   const selectedRenewals = renewals.filter((r) => selectedVehicleIds.has(r.id));
 
-  // Group by account
-  const accountGroups = {};
-  selectedRenewals.forEach((r) => {
-    const key = r.accountId || `_company:${r.company || "UNKNOWN"}`;
-    if (!accountGroups[key]) accountGroups[key] = [];
-    accountGroups[key].push(r);
-  });
+  // Try to detect a likely account from selected vehicles (pre-selection hint, not enforced)
+  const likelyAccountId = (() => {
+    const counts = {};
+    selectedRenewals.forEach((r) => {
+      if (r.accountId) counts[r.accountId] = (counts[r.accountId] || 0) + 1;
+    });
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    return sorted.length > 0 ? sorted[0][0] : null;
+  })();
 
-  const keys = Object.keys(accountGroups);
-  if (keys.length > 1) {
-    showToast("⚠️ Selected vehicles belong to multiple accounts. Please filter to one account before generating a document.", true);
+  // Filter accounts by GST compatibility for selected doc type
+  const filteredAccounts = renewalAccounts.filter((a) => {
+    if (docType === "INV") return a.isGstRegistered;
+    if (docType === "R")   return !a.isGstRegistered;
+    return true; // PI works for both
+  }).sort((a, b) => a.name.localeCompare(b.name));
+
+  if (filteredAccounts.length === 0) {
+    const needText = docType === "INV" ? "GST-registered" : docType === "R" ? "Non-GST" : "any";
+    showToast(`⚠️ No ${needText} accounts found. Add one in Accounts tab.`, true);
     return;
   }
-
-  const groupKey = keys[0];
-  let account;
-  if (groupKey.startsWith("_company:")) {
-    const companyName = groupKey.slice(9);
-    account = renewalAccounts.find((a) => a.name === companyName);
-    if (!account) {
-      showToast(`⚠️ No account found for "${companyName}". Create account first in Accounts tab.`, true);
-      return;
-    }
-  } else {
-    account = renewalAccounts.find((a) => a.id === groupKey);
-    if (!account) {
-      showToast("Account not found.", true);
-      return;
-    }
-  }
-
-  // Validate GST/Non-GST matches docType
-  if (docType === "INV" && !account.isGstRegistered) {
-    showToast(`⚠️ ${account.name} is not GST registered. Use Receipt instead.`, true);
-    return;
-  }
-  if (docType === "R" && account.isGstRegistered) {
-    showToast(`⚠️ ${account.name} is GST registered. Use Tax Invoice instead.`, true);
-    return;
-  }
-
-  // Build line items
-  const defaultRate = account.defaultRatePerYear || 500;
-  const lineItems = selectedRenewals.map((r) => {
-    const status = computeRenewalStatus(r);
-    return {
-      renewalId: r.id,
-      plateNumber: r.plateNumber,
-      vehicleName: r.vehicleName,
-      imei: r.imei,
-      simNumber: r.simNumber,
-      year: status.oldestUnpaidYear || status.currentYear,
-      periodStart: formatYMD(status.cycleStart),
-      periodEnd: formatYMD(status.cycleEnd),
-      rate: defaultRate,
-    };
-  });
 
   const docLabel = { PI: "Proforma Invoice", INV: "Tax Invoice", R: "Receipt" }[docType];
 
-  modal.innerHTML = `
-    <h3>Create ${docLabel} — ${account.name}</h3>
-    <p class="modal-desc">Review line items and totals. You can adjust rate per vehicle if needed.</p>
+  const renderDocForm = (accountId) => {
+    const account = renewalAccounts.find((a) => a.id === accountId);
+    if (!account) {
+      return `<div class="info-banner" style="color:#991b1b; background:#fef2f2; border-color:#fecaca;">Select an account above to continue.</div>`;
+    }
+    const defaultRate = account.defaultRatePerYear || 500;
+    const defaultShipTo = [account.address, account.city, account.state, account.pincode].filter(Boolean).join(", ");
+    return `
+      <div class="doc-gen-grid">
+        <div class="form-row">
+          <label>Doc Date</label>
+          <input type="date" id="doc_date" value="${formatYMD(new Date())}" />
+        </div>
+        <div class="form-row">
+          <label>Rate per SIM/Year (₹)</label>
+          <input type="number" id="doc_rate" value="${defaultRate}" min="0" />
+        </div>
+        <div class="form-row">
+          <label>GST Rate (%)</label>
+          <input type="number" id="doc_gstRate" value="${account.gstRate || 18}" min="0" max="28" step="0.01" />
+        </div>
+        <div class="form-row">
+          <label>HSN/SAC</label>
+          <input type="text" id="doc_hsn" value="${escapeHtml(account.hsnCode || '998412')}" />
+        </div>
+      </div>
 
-    <div class="doc-gen-grid">
       <div class="form-row">
-        <label>Doc Date</label>
-        <input type="date" id="doc_date" value="${formatYMD(new Date())}" />
+        <label>Ship To Address (leave empty = same as Bill To)</label>
+        <textarea id="doc_shipTo" rows="2" placeholder="${escapeHtml(defaultShipTo)}"></textarea>
       </div>
+
+      <div class="doc-items-preview">
+        <h4>Line Items (${selectedRenewals.length})</h4>
+        <div class="doc-items-list">
+          ${selectedRenewals.map((r, i) => {
+            const status = computeRenewalStatus(r);
+            return `
+              <div class="doc-item-row">
+                <span>${i + 1}. ${escapeHtml(r.plateNumber)} · ${escapeHtml(r.vehicleName || '')}</span>
+                <span class="mono">${escapeHtml(r.imei)}</span>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+
+      <div id="docTotalsPreview" class="doc-totals-preview"></div>
+
+      ${docType === "R" ? `
+        <div class="form-row">
+          <label>Payment Mode <span class="required">*</span></label>
+          <select id="doc_payMode" required>
+            <option value="cash">💵 Cash</option>
+            <option value="upi">📱 UPI</option>
+            <option value="bank">🏦 Bank Transfer</option>
+            <option value="cheque">📄 Cheque</option>
+          </select>
+        </div>
+      ` : ""}
+
       <div class="form-row">
-        <label>Rate per SIM/Year (₹)</label>
-        <input type="number" id="doc_rate" value="${defaultRate}" min="0" />
+        <label>Notes</label>
+        <textarea id="doc_notes" rows="2" placeholder="Any additional notes..."></textarea>
       </div>
-      <div class="form-row">
-        <label>GST Rate (%)</label>
-        <input type="number" id="doc_gstRate" value="${account.gstRate || 18}" min="0" max="28" step="0.01" />
-      </div>
-      <div class="form-row">
-        <label>HSN/SAC</label>
-        <input type="text" id="doc_hsn" value="${escapeHtml(account.hsnCode || '998412')}" />
-      </div>
+    `;
+  };
+
+  modal.innerHTML = `
+    <h3>Create ${docLabel}</h3>
+    <p class="modal-desc">${selectedRenewals.length} vehicle${selectedRenewals.length !== 1 ? 's' : ''} selected. Pick the customer account to bill.</p>
+
+    <div class="form-row" style="margin-bottom: 1rem;">
+      <label>Bill To (Customer Account) <span class="required">*</span></label>
+      <select id="doc_billTo" style="font-size: 0.95rem; padding: 0.55rem 0.7rem;">
+        <option value="">— Select customer account —</option>
+        ${filteredAccounts.map((a) => `
+          <option value="${escapeHtml(a.id)}" ${a.id === likelyAccountId ? 'selected' : ''}>
+            ${escapeHtml(a.name)}${a.isGstRegistered ? ' [GST]' : ' [Non-GST]'}${a.state ? ` · ${escapeHtml(a.state)}` : ''}
+          </option>
+        `).join("")}
+      </select>
     </div>
+
+    <div id="docFormBody">${renderDocForm(likelyAccountId)}</div>
 
     <div class="doc-items-preview">
       <h4>Line Items (${lineItems.length})</h4>
@@ -14269,10 +14374,19 @@ function openDocGenerationModal(docType) {
   modal.querySelector('[data-act="cancel"]').onclick = closeModal;
   modalOverlay.onclick = (e) => { if (e.target === modalOverlay) closeModal(); };
 
+  // Dynamic Bill To change — re-render form with new account defaults
+  const billToSelect = document.getElementById("doc_billTo");
   const refreshTotals = () => {
-    const rate = parseFloat(document.getElementById("doc_rate").value) || 0;
-    const gstRate = parseFloat(document.getElementById("doc_gstRate").value) || 0;
-    const subtotal = rate * lineItems.length;
+    const rateEl = document.getElementById("doc_rate");
+    const gstEl = document.getElementById("doc_gstRate");
+    if (!rateEl || !gstEl) return { subtotal: 0, cgst: 0, sgst: 0, igst: 0, total: 0, rate: 0, gstRate: 0 };
+    const accountId = billToSelect.value;
+    const account = renewalAccounts.find((a) => a.id === accountId);
+    if (!account) return { subtotal: 0, cgst: 0, sgst: 0, igst: 0, total: 0, rate: 0, gstRate: 0 };
+
+    const rate = parseFloat(rateEl.value) || 0;
+    const gstRate = parseFloat(gstEl.value) || 0;
+    const subtotal = rate * selectedRenewals.length;
     let cgst = 0, sgst = 0, igst = 0;
     if (docType === "INV") {
       const sameState = (sellerProfile.stateCode || "").trim() === (account.stateCode || "").trim();
@@ -14284,29 +14398,46 @@ function openDocGenerationModal(docType) {
       }
     }
     const total = subtotal + cgst + sgst + igst;
-    document.getElementById("docTotalsPreview").innerHTML = `
-      <div class="totals-row"><span>Subtotal:</span><strong>₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
-      ${docType === "INV" ? (igst > 0 ? `
-        <div class="totals-row"><span>IGST (${gstRate}%):</span><strong>₹${igst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
-      ` : `
-        <div class="totals-row"><span>CGST (${gstRate/2}%):</span><strong>₹${cgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
-        <div class="totals-row"><span>SGST (${gstRate/2}%):</span><strong>₹${sgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
-      `) : ""}
-      <div class="totals-row totals-grand"><span>Grand Total:</span><strong>₹${total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
-    `;
+    const totalsEl = document.getElementById("docTotalsPreview");
+    if (totalsEl) {
+      totalsEl.innerHTML = `
+        <div class="totals-row"><span>Subtotal:</span><strong>₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
+        ${docType === "INV" ? (igst > 0 ? `
+          <div class="totals-row"><span>IGST (${gstRate}%):</span><strong>₹${igst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
+        ` : `
+          <div class="totals-row"><span>CGST (${gstRate/2}%):</span><strong>₹${cgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
+          <div class="totals-row"><span>SGST (${gstRate/2}%):</span><strong>₹${sgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
+        `) : ""}
+        <div class="totals-row totals-grand"><span>Grand Total:</span><strong>₹${total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
+      `;
+    }
     return { subtotal, cgst, sgst, igst, total, rate, gstRate };
   };
-  refreshTotals();
-  ["doc_rate", "doc_gstRate"].forEach((id) => {
-    document.getElementById(id)?.addEventListener("input", refreshTotals);
+
+  const wireFormFields = () => {
+    ["doc_rate", "doc_gstRate"].forEach((id) => {
+      document.getElementById(id)?.addEventListener("input", refreshTotals);
+    });
+    refreshTotals();
+  };
+
+  billToSelect.addEventListener("change", () => {
+    document.getElementById("docFormBody").innerHTML = renderDocForm(billToSelect.value);
+    wireFormFields();
   });
+  wireFormFields();
 
   const confirmBtn = modal.querySelector(".modal-confirm");
   confirmBtn.addEventListener("click", async () => {
+    const accountId = billToSelect.value;
+    const account = renewalAccounts.find((a) => a.id === accountId);
+    if (!account) { showToast("Pick a Bill To account first.", true); return; }
+
     const totals = refreshTotals();
     const docDate = document.getElementById("doc_date").value;
     const hsn = document.getElementById("doc_hsn").value.trim();
     const notes = document.getElementById("doc_notes").value.trim();
+    const shipToOverride = document.getElementById("doc_shipTo").value.trim();
     const paymentMode = document.getElementById("doc_payMode")?.value || null;
 
     await runWithBusyButton(confirmBtn, async () => {
@@ -14328,7 +14459,20 @@ function openDocGenerationModal(docType) {
         const docNumber = `${docType}/${period}/${String(num).padStart(3, "0")}`;
 
         // Finalize line items with current rate
-        const finalItems = lineItems.map((li) => ({ ...li, rate: totals.rate }));
+        const finalItems = selectedRenewals.map((r) => {
+          const status = computeRenewalStatus(r);
+          return {
+            renewalId: r.id,
+            plateNumber: r.plateNumber,
+            vehicleName: r.vehicleName,
+            imei: r.imei,
+            simNumber: r.simNumber,
+            year: status.oldestUnpaidYear || status.currentYear,
+            periodStart: formatYMD(status.cycleStart),
+            periodEnd: formatYMD(status.cycleEnd),
+            rate: totals.rate,
+          };
+        });
 
         // Build HTML
         const html = buildDocumentHTML(docType, {
@@ -14346,6 +14490,7 @@ function openDocGenerationModal(docType) {
           gstRate: totals.gstRate,
           paymentMode,
           notes,
+          shipToAddress: shipToOverride,
         });
 
         // Save to DB
@@ -14367,6 +14512,7 @@ function openDocGenerationModal(docType) {
           paymentMode,
           linkedPayments: [],
           notes,
+          shipToAddress: shipToOverride,
           htmlSnapshot: html,
           createdBy: currentUser,
         };
@@ -14386,7 +14532,7 @@ function openDocGenerationModal(docType) {
 }
 
 /* ============================================================
-   DOCUMENT HTML BUILDER
+   DOCUMENT HTML BUILDER — v3.9.1
    ============================================================ */
 function buildDocumentHTML(docType, d) {
   const typeTitle = { PI: "PROFORMA INVOICE", INV: "TAX INVOICE", R: "RECEIPT" }[docType];
@@ -14394,14 +14540,18 @@ function buildDocumentHTML(docType, d) {
   const acct = d.account || {};
   const sameState = (seller.stateCode || "").trim() === (acct.stateCode || "").trim();
   const amountInWords = numToWords(Math.round(d.total));
+  const theme = DOC_THEMES[seller.themeColor] || DOC_THEMES.classic;
+
+  // Ship To — use override if provided, else same as Bill To
+  const billToAddr = [acct.address, acct.city, acct.state, acct.pincode].filter(Boolean).join(", ");
+  const shipTo = (d.shipToAddress && d.shipToAddress.trim()) ? d.shipToAddress.trim() : null;
 
   const itemsHtml = d.lineItems.map((li, i) => `
     <tr>
       <td>${i + 1}</td>
       <td>${escapeHtml(li.plateNumber)}<br><span class="small">${escapeHtml(li.vehicleName || "")}</span></td>
       <td class="mono small">${escapeHtml(li.imei)}</td>
-      <td class="mono small">${escapeHtml(li.simNumber)}</td>
-      <td>Y${li.year}</td>
+      <td class="mono small">${escapeHtml(d.hsnCode || "")}</td>
       <td class="small">${formatDateIndian(li.periodStart)} → ${formatDateIndian(li.periodEnd)}</td>
       <td class="right">₹${Number(li.rate).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
     </tr>
@@ -14417,22 +14567,23 @@ function buildDocumentHTML(docType, d) {
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: Arial, Helvetica, sans-serif; color: #000; font-size: 11px; line-height: 1.4; }
   .doc-wrap { max-width: 100%; }
-  .doc-title { text-align: center; font-size: 14px; font-weight: 700; letter-spacing: 2px; padding: 6px; background: #000; color: #fff; margin-bottom: 10px; }
+  .doc-title { text-align: center; font-size: 14px; font-weight: 700; letter-spacing: 2px; padding: 8px; background: ${theme.primary}; color: ${theme.fg}; margin-bottom: 10px; }
   .header-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
-  .header-tbl td { padding: 6px 10px; vertical-align: top; border: 1px solid #000; }
-  .seller-name { font-size: 15px; font-weight: 700; }
+  .header-tbl td { padding: 8px 10px; vertical-align: top; border: 1px solid #000; }
+  .seller-name { font-size: 15px; font-weight: 700; color: ${theme.primary}; }
   .doc-meta { text-align: right; }
   .doc-meta div { margin-bottom: 2px; }
   .doc-meta strong { font-size: 12px; }
+  .logo-img { max-height: 50px; max-width: 150px; margin-bottom: 4px; }
 
   .parties { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
   .parties td { width: 50%; padding: 8px 10px; border: 1px solid #000; vertical-align: top; }
-  .party-label { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .party-label { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; font-weight: 700; }
   .party-name { font-weight: 700; font-size: 12px; margin-bottom: 2px; }
 
   .items-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
   .items-tbl th, .items-tbl td { padding: 5px 6px; border: 1px solid #000; text-align: left; font-size: 10px; }
-  .items-tbl th { background: #e5e5e5; font-weight: 700; text-transform: uppercase; font-size: 9px; }
+  .items-tbl th { background: ${theme.primary}; color: ${theme.fg}; font-weight: 700; text-transform: uppercase; font-size: 9px; }
   .items-tbl .right { text-align: right; }
   .items-tbl .small { font-size: 9px; color: #333; }
   .mono { font-family: 'Courier New', monospace; }
@@ -14441,23 +14592,23 @@ function buildDocumentHTML(docType, d) {
   .totals-tbl td { padding: 5px 10px; border: 1px solid #000; font-size: 11px; }
   .totals-tbl .label { text-align: right; width: 70%; font-weight: 600; }
   .totals-tbl .value { text-align: right; width: 30%; }
-  .totals-tbl .grand-total { background: #000; color: #fff; font-weight: 700; font-size: 13px; }
+  .totals-tbl .grand-total { background: ${theme.primary}; color: ${theme.fg}; font-weight: 700; font-size: 13px; }
 
   .words-row { padding: 6px 10px; border: 1px solid #000; font-size: 10px; margin-bottom: 10px; background: #f5f5f5; }
   .words-row strong { font-style: italic; }
 
   .bank-sig { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
   .bank-sig td { border: 1px solid #000; padding: 8px 10px; vertical-align: top; width: 50%; }
-  .bank-sig .mini-label { font-size: 9px; color: #555; margin-bottom: 2px; }
+  .bank-sig .mini-label { font-size: 9px; color: #555; margin-bottom: 2px; font-weight: 700; }
 
   .terms { padding: 8px 10px; border: 1px solid #000; font-size: 9px; margin-bottom: 10px; }
   .terms h4 { font-size: 10px; margin-bottom: 4px; }
 
-  .sig-area { text-align: right; padding-top: 40px; }
-  .sig-line { border-top: 1px solid #000; display: inline-block; min-width: 150px; margin-top: 30px; padding-top: 2px; font-weight: 600; }
+  .sig-area { text-align: right; padding-top: 20px; }
+  .electronic-note { font-size: 10px; font-style: italic; color: #333; text-align: center; padding: 8px; border: 1px dashed #666; margin: 10px 0; background: #fafafa; }
 
-  .no-print { padding: 10px; background: #0891b2; color: white; text-align: center; }
-  .no-print button { background: white; color: #0891b2; border: none; padding: 6px 14px; border-radius: 4px; font-weight: 700; cursor: pointer; margin: 0 4px; }
+  .no-print { padding: 10px; background: ${theme.primary}; color: ${theme.fg}; text-align: center; }
+  .no-print button { background: white; color: ${theme.primary}; border: none; padding: 6px 14px; border-radius: 4px; font-weight: 700; cursor: pointer; margin: 0 4px; }
   @media print { .no-print { display: none; } }
 </style>
 </head>
@@ -14474,12 +14625,13 @@ function buildDocumentHTML(docType, d) {
   <table class="header-tbl">
     <tr>
       <td style="width: 60%;">
+        ${seller.logoUrl ? `<img src="${escapeHtml(seller.logoUrl)}" class="logo-img" alt="Logo" />` : ""}
         <div class="seller-name">${escapeHtml(seller.businessName || "")}</div>
         <div>${escapeHtml(seller.address || "")}</div>
         <div>${escapeHtml([seller.city, seller.state, seller.pincode].filter(Boolean).join(", "))}</div>
         ${seller.gstin ? `<div><strong>GSTIN:</strong> ${escapeHtml(seller.gstin)}</div>` : ""}
         ${seller.pan ? `<div><strong>PAN:</strong> ${escapeHtml(seller.pan)}</div>` : ""}
-        ${seller.contactPhone ? `<div>📞 ${escapeHtml(seller.contactPhone)}${seller.contactEmail ? ` · ✉️ ${escapeHtml(seller.contactEmail)}` : ""}</div>` : ""}
+        ${seller.contactPhone || seller.contactEmail ? `<div>${[seller.contactPhone, seller.contactEmail].filter(Boolean).map(escapeHtml).join(" · ")}</div>` : ""}
       </td>
       <td style="width: 40%;" class="doc-meta">
         <div><strong>${docType === "R" ? "Receipt" : docType === "PI" ? "PI" : "Invoice"} No:</strong><br>${escapeHtml(d.docNumber)}</div>
@@ -14492,19 +14644,22 @@ function buildDocumentHTML(docType, d) {
   <table class="parties">
     <tr>
       <td>
-        <div class="party-label">${docType === "R" ? "Received From" : "Bill To"}</div>
+        <div class="party-label">${docType === "R" ? "RECEIVED FROM" : "BILL TO"}</div>
         <div class="party-name">${escapeHtml(acct.name)}</div>
         ${acct.address ? `<div>${escapeHtml(acct.address)}</div>` : ""}
         <div>${escapeHtml([acct.city, acct.state, acct.pincode].filter(Boolean).join(", "))}</div>
         ${acct.gstin ? `<div><strong>GSTIN:</strong> ${escapeHtml(acct.gstin)}</div>` : ""}
         ${acct.pan ? `<div><strong>PAN:</strong> ${escapeHtml(acct.pan)}</div>` : ""}
-        ${acct.phone ? `<div>📞 ${escapeHtml(acct.phone)}</div>` : ""}
+        ${acct.phone ? `<div>${escapeHtml(acct.phone)}</div>` : ""}
       </td>
       <td>
-        <div class="party-label">Supply Details</div>
-        <div><strong>Place of Supply:</strong> ${escapeHtml(acct.state || "—")}${acct.stateCode ? ` (${escapeHtml(acct.stateCode)})` : ""}</div>
-        <div><strong>HSN/SAC:</strong> ${escapeHtml(d.hsnCode || "")}</div>
-        <div><strong>Service:</strong> SIM subscription renewal</div>
+        <div class="party-label">SHIP TO</div>
+        <div class="party-name">${escapeHtml(acct.name)}</div>
+        ${shipTo ? `<div>${escapeHtml(shipTo).replace(/\n/g, "<br>")}</div>` : `
+          ${acct.address ? `<div>${escapeHtml(acct.address)}</div>` : ""}
+          <div>${escapeHtml([acct.city, acct.state, acct.pincode].filter(Boolean).join(", "))}</div>
+        `}
+        ${docType !== "R" ? `<div style="margin-top: 4px;"><strong>Place of Supply:</strong> ${escapeHtml(acct.state || "—")}${acct.stateCode ? ` (${escapeHtml(acct.stateCode)})` : ""}</div>` : ""}
         ${docType !== "R" ? `<div><strong>Tax Type:</strong> ${sameState ? "CGST + SGST (intra-state)" : "IGST (inter-state)"}</div>` : ""}
       </td>
     </tr>
@@ -14516,8 +14671,7 @@ function buildDocumentHTML(docType, d) {
         <th>#</th>
         <th>Vehicle</th>
         <th>IMEI</th>
-        <th>SIM</th>
-        <th>Year</th>
+        <th>HSN/SAC</th>
         <th>Period</th>
         <th class="right">Amount</th>
       </tr>
@@ -14571,24 +14725,24 @@ function buildDocumentHTML(docType, d) {
           <div>A/c Holder: ${escapeHtml(seller.bankAccountHolder || "")}</div>
           <div>A/c No: <span class="mono">${escapeHtml(seller.bankAccountNo || "")}</span></div>
           <div>IFSC: <span class="mono">${escapeHtml(seller.bankIfsc || "")}</span></div>
-          <div>Branch: ${escapeHtml(seller.bankBranch || "")}</div>
+          <div>Account Type: Current</div>
         ` : docType === "R" ? `
           <div class="mini-label">RECEIVED WITH THANKS</div>
-          <div style="margin-top: 20px; font-size: 10px;">Received the sum of <strong>₹${d.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong> towards SIM subscription renewal for the vehicles listed above.</div>
+          <div style="margin-top: 10px; font-size: 10px;">Received the sum of <strong>₹${d.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong> towards SIM subscription renewal for the vehicles listed above.</div>
         ` : `
           <div class="mini-label">DECLARATION</div>
           <div style="font-size: 9px; margin-top: 4px;">We declare that this invoice shows the actual price of the goods/services described and that all particulars are true and correct.</div>
         `}
       </td>
       <td class="sig-area">
-        <div style="font-size: 10px;">For <strong>${escapeHtml(seller.businessName || "")}</strong></div>
-        <div class="sig-line">
-          ${escapeHtml(seller.signatureName || "Authorised Signatory")}
-          ${seller.signatureDesignation ? `<br><span style="font-weight: 400; font-size: 9px;">${escapeHtml(seller.signatureDesignation)}</span>` : ""}
-        </div>
+        <div style="font-size: 10px; font-weight: 600;">For <strong>${escapeHtml(seller.businessName || "")}</strong></div>
       </td>
     </tr>
   </table>
+
+  <div class="electronic-note">
+    This is an electronically generated document, no signature is required.
+  </div>
 
   ${seller.termsText ? `
   <div class="terms">
@@ -14603,10 +14757,6 @@ function buildDocumentHTML(docType, d) {
     <div>${escapeHtml(d.notes).replace(/\n/g, "<br>")}</div>
   </div>
   ` : ""}
-
-  <div style="text-align: center; font-size: 9px; color: #666; margin-top: 10px;">
-    This is a computer-generated document. Generated on ${new Date().toLocaleString("en-IN")}.
-  </div>
 </div>
 </body>
 </html>`;
