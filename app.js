@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.9.2";
+const APP_VERSION = "3.9.3";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -14363,37 +14363,6 @@ function openDocGenerationModal(docType) {
     </div>
 
     <div id="docFormBody">${renderDocForm(likelyAccountId)}</div>
-
-    <div class="doc-items-preview">
-      <h4>Line Items (${lineItems.length})</h4>
-      <div class="doc-items-list">
-        ${lineItems.map((li, i) => `
-          <div class="doc-item-row">
-            <span>${i + 1}. ${escapeHtml(li.plateNumber)} · Y${li.year}</span>
-            <span class="mono">${escapeHtml(li.imei)}</span>
-          </div>
-        `).join("")}
-      </div>
-    </div>
-
-    <div id="docTotalsPreview" class="doc-totals-preview"></div>
-
-    ${docType === "R" ? `
-      <div class="form-row">
-        <label>Payment Mode <span class="required">*</span></label>
-        <select id="doc_payMode" required>
-          <option value="cash">💵 Cash</option>
-          <option value="upi">📱 UPI</option>
-          <option value="bank">🏦 Bank Transfer</option>
-          <option value="cheque">📄 Cheque</option>
-        </select>
-      </div>
-    ` : ""}
-
-    <div class="form-row">
-      <label>Notes</label>
-      <textarea id="doc_notes" rows="2" placeholder="Any additional notes..."></textarea>
-    </div>
 
     <div class="modal-actions">
       <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
