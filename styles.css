@@ -10650,3 +10650,253 @@ button.clickable-card:focus-visible {
 
 .phi-anchor-default { background: #ecfeff; color: #0891b2; border: 1px solid #a5f3fc; }
 .phi-anchor-special { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+
+/* ============================================================
+   v3.9.0 — Clickable stats, Sub-nav, Bulk actions, Documents
+   ============================================================ */
+
+/* Clickable stat boxes */
+.clickable-stat {
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.15s, border-color 0.15s;
+  position: relative;
+}
+
+.clickable-stat:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
+}
+
+.stat-active {
+  box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.3), 0 4px 12px rgba(15, 23, 42, 0.1) !important;
+  border-left-width: 5px !important;
+  transform: translateY(-1px);
+}
+
+.stat-active::after {
+  content: "✓";
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  color: #0891b2;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+/* Sub-nav */
+.sub-nav {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.3rem;
+  background: var(--surface, #ffffff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 999px;
+  margin-bottom: 1rem;
+  overflow-x: auto;
+}
+
+.sub-nav-chip {
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #475569;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.sub-nav-chip:hover {
+  background: #f1f5f9;
+}
+
+.sub-nav-chip.active {
+  background: #0891b2;
+  color: white;
+}
+
+/* Checkbox column */
+.checkbox-col {
+  width: 36px;
+  text-align: center;
+}
+
+.checkbox-col input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #0891b2;
+}
+
+.row-selected {
+  background: #ecfeff !important;
+}
+
+/* Bulk action bar */
+.bulk-action-bar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: linear-gradient(135deg, #0891b2 0%, #0e7490 100%);
+  color: white;
+  padding: 0.8rem 1rem;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(8, 145, 178, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.bulk-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+  flex-wrap: wrap;
+}
+
+.bulk-left strong {
+  background: white;
+  color: #0891b2;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.bulk-warn {
+  background: rgba(254, 243, 199, 0.9);
+  color: #78350f;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.bulk-action-bar .btn {
+  background: white;
+  color: #0891b2;
+  border: none;
+  font-weight: 700;
+}
+
+.bulk-action-bar .btn:hover {
+  background: #ecfeff;
+}
+
+.bulk-action-bar .btn-outline {
+  background: transparent;
+  color: white;
+  border: 1px solid white;
+}
+
+.bulk-action-bar .btn-outline:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* GST / Non-GST badges */
+.gst-badge {
+  display: inline-block;
+  background: #d1fae5;
+  color: #065f46;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  border: 1px solid #a7f3d0;
+}
+
+.nongst-badge {
+  display: inline-block;
+  background: #f3f4f6;
+  color: #4b5563;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  border: 1px solid #d1d5db;
+}
+
+/* Info banner (accounts page) */
+.info-banner {
+  background: #ecfeff;
+  border: 1px dashed #67e8f9;
+  color: #0e7490;
+  padding: 0.8rem 1rem;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/* Doc generation modal */
+.doc-gen-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.doc-items-preview {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.65rem 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.doc-items-preview h4 {
+  font-size: 0.85rem;
+  margin-bottom: 0.4rem;
+  color: #475569;
+}
+
+.doc-items-list {
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.doc-item-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 3px 0;
+  font-size: 0.78rem;
+  border-bottom: 1px dashed #e2e8f0;
+}
+
+.doc-item-row:last-child { border-bottom: none; }
+
+.doc-totals-preview {
+  background: #fff;
+  border: 2px solid #0891b2;
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.totals-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  font-size: 0.88rem;
+}
+
+.totals-grand {
+  border-top: 2px solid #0891b2;
+  margin-top: 0.4rem;
+  padding-top: 0.5rem;
+  font-size: 1.05rem;
+  color: #0891b2;
+}
+

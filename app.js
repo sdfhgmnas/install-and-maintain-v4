@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.8.1";
+const APP_VERSION = "3.9.0";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -82,8 +82,18 @@ let renewals = [];
 let renewalsTableReady = true;
 let renewalsQuery = "";
 let renewalsCompanyFilter = "all";
-let renewalsStatusFilter = "all";  // all | expired | urgent | soon | upcoming | active | paid
+let renewalsStatusFilter = "all";  // all | overdue | expired | urgent | soon | upcoming | active | paid
 let renewalsYearFilter = "all";
+// v3.9.0 — accounts, seller profile, documents
+let renewalAccounts = [];
+let renewalAccountsTableReady = true;
+let sellerProfile = null;
+let sellerProfileTableReady = true;
+let renewalDocuments = [];
+let renewalDocumentsTableReady = true;
+let renewalSubView = "vehicles"; // vehicles | accounts | documents | settings
+let selectedVehicleIds = new Set();
+let accountFormData = null;
 let simsTableReady = true;
 let stockItemsTableReady = true;
 let stockTxTableReady = true;
@@ -1131,6 +1141,31 @@ async function refreshAllData() {
       console.warn("renewals table missing — run renewals-migration.sql", err?.message || err);
       renewals = [];
       renewalsTableReady = false;
+    }
+    // v3.9.0 — Accounts, Seller profile, Documents (soft-fail if migration not run)
+    try {
+      renewalAccounts = await withTimeout(fetchRenewalAccounts(), 15000, "Fetch renewal accounts");
+      renewalAccountsTableReady = true;
+    } catch (err) {
+      console.warn("renewal_accounts table missing", err?.message || err);
+      renewalAccounts = [];
+      renewalAccountsTableReady = false;
+    }
+    try {
+      sellerProfile = await withTimeout(fetchSellerProfile(), 15000, "Fetch seller profile");
+      sellerProfileTableReady = true;
+    } catch (err) {
+      console.warn("renewal_seller_profile table missing", err?.message || err);
+      sellerProfile = null;
+      sellerProfileTableReady = false;
+    }
+    try {
+      renewalDocuments = await withTimeout(fetchRenewalDocuments(500), 15000, "Fetch renewal documents");
+      renewalDocumentsTableReady = true;
+    } catch (err) {
+      console.warn("renewal_documents table missing", err?.message || err);
+      renewalDocuments = [];
+      renewalDocumentsTableReady = false;
     }
     // User permissions — soft-fail to default if migration not run
     try {
@@ -12526,6 +12561,11 @@ function totalCollected(renewals) {
 }
 
 function renderRenewalsPage() {
+  // Sub-tab routing
+  if (renewalSubView === "accounts") { renderRenewalAccountsSubPage(); return; }
+  if (renewalSubView === "documents") { renderRenewalDocumentsSubPage(); return; }
+  if (renewalSubView === "settings") { renderRenewalSettingsSubPage(); return; }
+  // Default: vehicles list
   if (!renewalsTableReady) {
     app.innerHTML = `
       ${renderHeader("Renewal Tracker", "Setup required")}
@@ -12607,22 +12647,29 @@ function renderRenewalsPage() {
   // For collector-only view, we want a cleaner header
   const headerSubtitle = `Track SIM subscription renewals · ${stats.total} vehicles`;
 
+  const activeStat = renewalsStatusFilter; // used to highlight active box
+  const boxClass = (s) => `summary-box clickable-stat ${activeStat === s ? 'stat-active' : ''}`;
+
   app.innerHTML = `
     ${renderHeader("Renewal Tracker", headerSubtitle)}
     <main class="main">
       ${isAdmin ? renderAdminNav("renewals") : ""}
 
+      ${renderRenewalSubNav("vehicles", isAdmin)}
+
       <div class="summary-grid renewal-stats">
-        <div class="summary-box"><strong>${stats.total}</strong><span>Total</span></div>
-        <div class="summary-box summary-critical"><strong>${stats.overdue}</strong><span>🚨 OVERDUE</span></div>
-        <div class="summary-box summary-danger"><strong>${stats.expired}</strong><span>🔴 Expired</span></div>
-        <div class="summary-box summary-warn"><strong>${stats.urgent}</strong><span>⚠️ Urgent (≤7d)</span></div>
-        <div class="summary-box summary-warn"><strong>${stats.soon}</strong><span>⚠️ Soon (≤15d)</span></div>
-        <div class="summary-box"><strong>${stats.upcoming}</strong><span>🔔 Upcoming (≤30d)</span></div>
-        <div class="summary-box summary-ok"><strong>${stats.active}</strong><span>🟢 Active</span></div>
-        <div class="summary-box summary-purple"><strong>${stats.paid}</strong><span>✅ Paid (current)</span></div>
+        <div class="${boxClass('all')}" data-stat-filter="all"><strong>${stats.total}</strong><span>Total</span></div>
+        <div class="${boxClass('overdue')} summary-critical" data-stat-filter="overdue"><strong>${stats.overdue}</strong><span>🚨 OVERDUE</span></div>
+        <div class="${boxClass('expired')} summary-danger" data-stat-filter="expired"><strong>${stats.expired}</strong><span>🔴 Expired</span></div>
+        <div class="${boxClass('urgent')} summary-warn" data-stat-filter="urgent"><strong>${stats.urgent}</strong><span>⚠️ Urgent (≤7d)</span></div>
+        <div class="${boxClass('soon')} summary-warn" data-stat-filter="soon"><strong>${stats.soon}</strong><span>⚠️ Soon (≤15d)</span></div>
+        <div class="${boxClass('upcoming')}" data-stat-filter="upcoming"><strong>${stats.upcoming}</strong><span>🔔 Upcoming (≤30d)</span></div>
+        <div class="${boxClass('active')} summary-ok" data-stat-filter="active"><strong>${stats.active}</strong><span>🟢 Active</span></div>
+        <div class="${boxClass('paid')} summary-purple" data-stat-filter="paid"><strong>${stats.paid}</strong><span>✅ Paid (current)</span></div>
         <div class="summary-box summary-info"><strong>₹${totalReceived.toLocaleString("en-IN")}</strong><span>💰 Collected</span></div>
       </div>
+
+      ${selectedVehicleIds.size > 0 ? renderBulkActionBar(decorated) : ""}
 
       <section class="card">
         <div class="section-heading">
@@ -12688,9 +12735,10 @@ function renderRenewalsPage() {
           <table>
             <thead>
               <tr>
+                <th class="checkbox-col"><input type="checkbox" id="selectAllRenewals" ${filtered.length > 0 && filtered.every(d => selectedVehicleIds.has(d.renewal.id)) ? 'checked' : ''} title="Select all filtered"></th>
                 <th>Status</th>
                 <th>Plate / Vehicle</th>
-                <th>Company</th>
+                <th>Company / Account</th>
                 <th>IMEI</th>
                 <th>SIM</th>
                 <th>Created</th>
@@ -12701,10 +12749,12 @@ function renderRenewalsPage() {
             </thead>
             <tbody>
               ${filtered.length === 0 ? `
-                <tr class="empty-row"><td colspan="9">${decorated.length === 0 ? "No renewals yet. Click ↑ Upload Excel." : "No renewals match your filters."}</td></tr>
+                <tr class="empty-row"><td colspan="10">${decorated.length === 0 ? "No renewals yet. Click ↑ Upload Excel." : "No renewals match your filters."}</td></tr>
               ` : filtered.map(({ renewal: r, status }) => {
                 const meta = renewalStatusMeta(status.status);
                 const isOverdue = status.status === "overdue";
+                const isSelected = selectedVehicleIds.has(r.id);
+                const linkedAccount = r.accountId ? renewalAccounts.find(a => a.id === r.accountId) : null;
                 const daysText = status.daysUntilExpiry === null ? "—"
                   : isOverdue ? `overdue by ${status.daysOverdue} days`
                   : status.daysUntilExpiry < 0 ? `${Math.abs(status.daysUntilExpiry)} days ago`
@@ -12712,13 +12762,18 @@ function renderRenewalsPage() {
                   : `in ${status.daysUntilExpiry} days`;
                 const payYear = status.oldestUnpaidYear || status.currentYear;
                 return `
-                  <tr class="${isOverdue ? 'row-overdue' : ''}">
+                  <tr class="${isOverdue ? 'row-overdue' : ''} ${isSelected ? 'row-selected' : ''}">
+                    <td class="checkbox-col"><input type="checkbox" class="vehicle-select" data-id="${escapeHtml(r.id)}" ${isSelected ? 'checked' : ''}></td>
                     <td><span class="status-pill ${meta.pillClass}">${meta.icon} ${escapeHtml(meta.label.split(" ")[0])}</span></td>
                     <td>
                       <strong>${escapeHtml(r.plateNumber || "—")}</strong><br>
                       <span style="font-size:0.78rem; color:#64748b;">${escapeHtml(r.vehicleName || "")}</span>
                     </td>
-                    <td>${escapeHtml(r.company || "—")}${r.branch ? `<br><span style="font-size:0.75rem; color:#94a3b8;">${escapeHtml(r.branch)}</span>` : ""}</td>
+                    <td>
+                      ${linkedAccount ? `<strong style="color:#0891b2;">${escapeHtml(linkedAccount.name)}</strong>` : escapeHtml(r.company || "—")}
+                      ${r.branch ? `<br><span style="font-size:0.75rem; color:#94a3b8;">${escapeHtml(r.branch)}</span>` : ""}
+                      ${linkedAccount?.isGstRegistered ? `<br><span class="gst-badge">GST</span>` : linkedAccount ? `<br><span class="nongst-badge">Non-GST</span>` : ""}
+                    </td>
                     <td class="mono">${escapeHtml(r.imei)}</td>
                     <td class="mono">
                       ${escapeHtml(r.simNumber || "—")}
@@ -12798,6 +12853,47 @@ function renderRenewalsPage() {
 
   if (isAdmin) bindAdminNav();
   bindLogout();
+  bindRenewalSubNav();
+
+  // Clickable stat boxes
+  app.querySelectorAll(".clickable-stat[data-stat-filter]").forEach((box) => {
+    box.addEventListener("click", () => {
+      const f = box.dataset.statFilter;
+      renewalsStatusFilter = (renewalsStatusFilter === f) ? "all" : f;
+      render();
+    });
+  });
+
+  // Select all checkbox
+  document.getElementById("selectAllRenewals")?.addEventListener("change", (e) => {
+    const checked = e.target.checked;
+    if (checked) {
+      filtered.forEach((d) => selectedVehicleIds.add(d.renewal.id));
+    } else {
+      filtered.forEach((d) => selectedVehicleIds.delete(d.renewal.id));
+    }
+    render();
+  });
+
+  // Row checkboxes
+  app.querySelectorAll(".vehicle-select").forEach((cb) => {
+    cb.addEventListener("change", (e) => {
+      const id = e.target.dataset.id;
+      if (e.target.checked) selectedVehicleIds.add(id);
+      else selectedVehicleIds.delete(id);
+      render();
+    });
+  });
+
+  // Bulk action bar handlers
+  document.getElementById("bulkClearBtn")?.addEventListener("click", () => {
+    selectedVehicleIds.clear();
+    render();
+  });
+  document.getElementById("bulkCreatePIBtn")?.addEventListener("click", () => openDocGenerationModal("PI"));
+  document.getElementById("bulkCreateInvoiceBtn")?.addEventListener("click", () => openDocGenerationModal("INV"));
+  document.getElementById("bulkCreateReceiptBtn")?.addEventListener("click", () => openDocGenerationModal("R"));
+  document.getElementById("bulkAssignAccountBtn")?.addEventListener("click", () => openBulkAccountAssignModal());
 
   // Wire handlers
   document.getElementById("renewalsSearch")?.addEventListener("input", (e) => {
@@ -13375,6 +13471,1183 @@ function exportRenewalsToExcel(list) {
   const fname = `renewals-export-${formatYMD(new Date())}.xlsx`;
   XLSX.writeFile(wb, fname);
   showToast(`✓ Exported ${rows.length} rows`);
+}
+
+/* ============================================================
+   v3.9.0 — SUB-NAV, ACCOUNTS, SETTINGS, DOCUMENTS
+   ============================================================ */
+
+function renderRenewalSubNav(activeKey, isAdmin) {
+  const items = [
+    { key: "vehicles",  label: "🚗 Vehicles", show: true },
+    { key: "accounts",  label: "🏢 Accounts", show: true },
+    { key: "documents", label: "📄 Documents", show: true },
+    { key: "settings",  label: "⚙️ Settings", show: !!isAdmin },
+  ].filter((x) => x.show);
+  return `
+    <div class="sub-nav">
+      ${items.map((it) => `
+        <button type="button" class="sub-nav-chip ${activeKey === it.key ? 'active' : ''}" data-sub-nav="${it.key}">${it.label}</button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function bindRenewalSubNav() {
+  app.querySelectorAll("[data-sub-nav]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      renewalSubView = btn.dataset.subNav;
+      selectedVehicleIds.clear();
+      render();
+    });
+  });
+}
+
+function renderBulkActionBar(decorated) {
+  const count = selectedVehicleIds.size;
+  const selectedList = Array.from(selectedVehicleIds)
+    .map((id) => decorated.find((d) => d.renewal.id === id))
+    .filter(Boolean);
+  // Group by account
+  const accountSet = new Set();
+  selectedList.forEach((d) => {
+    const r = d.renewal;
+    if (r.accountId) accountSet.add(r.accountId);
+    else accountSet.add("UNASSIGNED");
+  });
+  const multipleAccounts = accountSet.size > 1;
+  const hasUnassigned = accountSet.has("UNASSIGNED");
+
+  return `
+    <div class="bulk-action-bar">
+      <div class="bulk-left">
+        <strong>${count}</strong> selected
+        ${multipleAccounts ? '<span class="bulk-warn">⚠️ Multiple accounts — can only group same-account for one doc</span>' : ''}
+        ${hasUnassigned ? '<span class="bulk-warn">⚠️ Some vehicles have no account</span>' : ''}
+      </div>
+      <div class="bulk-actions">
+        <button type="button" class="btn btn-outline btn-sm" id="bulkAssignAccountBtn">🔗 Assign Account</button>
+        <button type="button" class="btn btn-primary btn-sm" id="bulkCreatePIBtn">📝 Create PI</button>
+        <button type="button" class="btn btn-primary btn-sm" id="bulkCreateInvoiceBtn">🧾 Tax Invoice</button>
+        <button type="button" class="btn btn-primary btn-sm" id="bulkCreateReceiptBtn">🧾 Receipt</button>
+        <button type="button" class="btn btn-outline btn-sm" id="bulkClearBtn">✕ Clear</button>
+      </div>
+    </div>
+  `;
+}
+
+/* ============================================================
+   SUB-PAGE: ACCOUNTS
+   ============================================================ */
+function renderRenewalAccountsSubPage() {
+  const perms = getUserPerms(currentUser);
+  const isAdmin = perms?.isAdmin;
+
+  if (!renewalAccountsTableReady) {
+    app.innerHTML = `
+      ${renderHeader("Renewal Tracker — Accounts", "Setup required")}
+      <main class="main">
+        ${isAdmin ? renderAdminNav("renewals") : ""}
+        ${renderRenewalSubNav("accounts", isAdmin)}
+        <section class="card">
+          <h2>⚠️ Database setup needed</h2>
+          <p>Run <code>renewal-documents-migration.sql</code> in Supabase SQL Editor to enable accounts.</p>
+        </section>
+      </main>
+    `;
+    if (isAdmin) bindAdminNav();
+    bindRenewalSubNav();
+    bindLogout();
+    return;
+  }
+
+  const sorted = [...renewalAccounts].sort((a, b) => a.name.localeCompare(b.name));
+
+  app.innerHTML = `
+    ${renderHeader("Renewal Tracker — Accounts", `${sorted.length} customer accounts`)}
+    <main class="main">
+      ${isAdmin ? renderAdminNav("renewals") : ""}
+      ${renderRenewalSubNav("accounts", isAdmin)}
+
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <h2>Customer Accounts</h2>
+            <p class="section-subtitle">Add GST details, pricing, HSN code per customer account. Vehicles link to accounts.</p>
+          </div>
+          <div class="bulk-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="addAccountBtn">+ Add Account</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>GST?</th>
+                <th>GSTIN</th>
+                <th>State</th>
+                <th>Rate ₹/yr</th>
+                <th>HSN</th>
+                <th>Vehicles</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sorted.length === 0 ? `
+                <tr class="empty-row"><td colspan="8">No accounts yet. Click + Add Account to create first.</td></tr>
+              ` : sorted.map((a) => {
+                const vehCount = renewals.filter((r) => r.accountId === a.id || (!r.accountId && r.company === a.name)).length;
+                return `
+                  <tr>
+                    <td><strong>${escapeHtml(a.name)}</strong>${a.contactPerson ? `<br><span style="font-size:0.75rem; color:#64748b;">${escapeHtml(a.contactPerson)}</span>` : ""}</td>
+                    <td>${a.isGstRegistered ? '<span class="gst-badge">GST</span>' : '<span class="nongst-badge">Non-GST</span>'}</td>
+                    <td class="mono">${escapeHtml(a.gstin || "—")}</td>
+                    <td>${escapeHtml(a.state || "—")}${a.stateCode ? ` (${escapeHtml(a.stateCode)})` : ""}</td>
+                    <td>₹${a.defaultRatePerYear.toLocaleString("en-IN")}</td>
+                    <td class="mono">${escapeHtml(a.hsnCode)}</td>
+                    <td>${vehCount}</td>
+                    <td class="row-actions">
+                      <button type="button" class="btn btn-outline btn-sm edit-account-btn" data-id="${escapeHtml(a.id)}">✎ Edit</button>
+                      ${isAdmin ? `<button type="button" class="btn btn-outline btn-sm delete-account-btn" data-id="${escapeHtml(a.id)}">🗑</button>` : ""}
+                    </td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        ${renewals.filter(r => !r.accountId && r.company).length > 0 ? `
+          <div class="info-banner" style="margin-top: 1rem;">
+            💡 <strong>${renewals.filter(r => !r.accountId && r.company).length} vehicles</strong> have company names from Excel but aren't linked to accounts yet.
+            <button type="button" class="btn btn-outline btn-sm" id="autoCreateAccountsBtn">⚡ Auto-create accounts from company names</button>
+          </div>
+        ` : ""}
+      </section>
+    </main>
+  `;
+
+  if (isAdmin) bindAdminNav();
+  bindRenewalSubNav();
+  bindLogout();
+
+  document.getElementById("addAccountBtn")?.addEventListener("click", () => openAccountFormModal(null));
+  app.querySelectorAll(".edit-account-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const a = renewalAccounts.find((x) => x.id === btn.dataset.id);
+      if (a) openAccountFormModal(a);
+    });
+  });
+  app.querySelectorAll(".delete-account-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const a = renewalAccounts.find((x) => x.id === btn.dataset.id);
+      if (!a) return;
+      if (!confirm(`Delete account "${a.name}"? Vehicles will become unassigned. Cannot be undone.`)) return;
+      try {
+        await deleteRenewalAccount(a.id);
+        renewalAccounts = renewalAccounts.filter((x) => x.id !== a.id);
+        showToast(`✓ Deleted ${a.name}`);
+        render();
+      } catch (err) {
+        showToast(err.message || "Delete failed.", true);
+      }
+    });
+  });
+  document.getElementById("autoCreateAccountsBtn")?.addEventListener("click", async () => {
+    const uniqueCompanies = new Set();
+    renewals.forEach((r) => {
+      if (r.company && !r.accountId && !renewalAccounts.find((a) => a.name === r.company)) {
+        uniqueCompanies.add(r.company);
+      }
+    });
+    if (uniqueCompanies.size === 0) {
+      showToast("No new company names to add.", true);
+      return;
+    }
+    if (!confirm(`Auto-create ${uniqueCompanies.size} accounts from company names? You can fill GST details later.`)) return;
+    try {
+      for (const name of uniqueCompanies) {
+        await upsertRenewalAccount({ name, isGstRegistered: false, defaultRatePerYear: 500 });
+      }
+      await refreshAllData();
+      showToast(`✓ Created ${uniqueCompanies.size} accounts`);
+      render();
+    } catch (err) {
+      showToast(err.message || "Auto-create failed.", true);
+    }
+  });
+}
+
+function openAccountFormModal(existing) {
+  const a = existing || { name: "", isGstRegistered: false, defaultRatePerYear: 500, hsnCode: "998412", gstRate: 18 };
+  modal.innerHTML = `
+    <h3>${existing ? "Edit" : "Add"} Account</h3>
+    <div class="payment-form">
+      <div class="form-row">
+        <label>Account Name <span class="required">*</span></label>
+        <input type="text" id="acctName" value="${escapeHtml(a.name || '')}" required placeholder="e.g. NAGESHWAR" />
+      </div>
+      <div class="form-row">
+        <label>
+          <input type="checkbox" id="acctIsGst" ${a.isGstRegistered ? 'checked' : ''} />
+          GST Registered customer
+        </label>
+      </div>
+      <div class="form-row">
+        <label>GSTIN</label>
+        <input type="text" id="acctGstin" value="${escapeHtml(a.gstin || '')}" placeholder="22AAAAA0000A1Z5" maxlength="15" />
+      </div>
+      <div class="form-row-grid">
+        <div class="form-row">
+          <label>PAN</label>
+          <input type="text" id="acctPan" value="${escapeHtml(a.pan || '')}" placeholder="AAAAA0000A" maxlength="10" />
+        </div>
+        <div class="form-row">
+          <label>Phone</label>
+          <input type="text" id="acctPhone" value="${escapeHtml(a.phone || '')}" />
+        </div>
+      </div>
+      <div class="form-row">
+        <label>Address</label>
+        <textarea id="acctAddress" rows="2">${escapeHtml(a.address || '')}</textarea>
+      </div>
+      <div class="form-row-grid">
+        <div class="form-row">
+          <label>City</label>
+          <input type="text" id="acctCity" value="${escapeHtml(a.city || '')}" />
+        </div>
+        <div class="form-row">
+          <label>Pincode</label>
+          <input type="text" id="acctPincode" value="${escapeHtml(a.pincode || '')}" />
+        </div>
+      </div>
+      <div class="form-row-grid">
+        <div class="form-row">
+          <label>State</label>
+          <input type="text" id="acctState" value="${escapeHtml(a.state || '')}" placeholder="e.g. Chhattisgarh" />
+        </div>
+        <div class="form-row">
+          <label>State Code <span class="required">*</span></label>
+          <input type="text" id="acctStateCode" value="${escapeHtml(a.stateCode || '')}" placeholder="22" maxlength="2" />
+        </div>
+      </div>
+      <div class="form-row">
+        <label>Contact Person</label>
+        <input type="text" id="acctContact" value="${escapeHtml(a.contactPerson || '')}" />
+      </div>
+      <div class="form-row">
+        <label>Email</label>
+        <input type="email" id="acctEmail" value="${escapeHtml(a.email || '')}" />
+      </div>
+      <div class="form-row-grid">
+        <div class="form-row">
+          <label>Rate per Year (₹) <span class="required">*</span></label>
+          <input type="number" id="acctRate" value="${a.defaultRatePerYear}" min="0" step="1" required />
+        </div>
+        <div class="form-row">
+          <label>HSN/SAC Code</label>
+          <input type="text" id="acctHsn" value="${escapeHtml(a.hsnCode || '998412')}" />
+        </div>
+      </div>
+      <div class="form-row">
+        <label>GST Rate (%)</label>
+        <input type="number" id="acctGstRate" value="${a.gstRate}" min="0" max="28" step="0.01" />
+      </div>
+      <div class="form-row">
+        <label>Notes</label>
+        <textarea id="acctNotes" rows="2">${escapeHtml(a.notes || '')}</textarea>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
+      <button type="button" class="btn btn-primary modal-confirm">Save Account</button>
+    </div>
+  `;
+  modalOverlay.classList.remove("hidden");
+  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+  modalOverlay.onclick = (e) => { if (e.target === modalOverlay) closeModal(); };
+
+  const confirmBtn = modal.querySelector(".modal-confirm");
+  confirmBtn.addEventListener("click", async () => {
+    if (confirmBtn.dataset.busy === "1") return;
+    const name = document.getElementById("acctName").value.trim();
+    if (!name) { showToast("Account name required.", true); return; }
+    const payload = {
+      id: existing?.id,
+      name,
+      isGstRegistered: document.getElementById("acctIsGst").checked,
+      gstin: document.getElementById("acctGstin").value.trim(),
+      pan: document.getElementById("acctPan").value.trim(),
+      phone: document.getElementById("acctPhone").value.trim(),
+      address: document.getElementById("acctAddress").value.trim(),
+      city: document.getElementById("acctCity").value.trim(),
+      pincode: document.getElementById("acctPincode").value.trim(),
+      state: document.getElementById("acctState").value.trim(),
+      stateCode: document.getElementById("acctStateCode").value.trim(),
+      contactPerson: document.getElementById("acctContact").value.trim(),
+      email: document.getElementById("acctEmail").value.trim(),
+      defaultRatePerYear: parseFloat(document.getElementById("acctRate").value) || 0,
+      hsnCode: document.getElementById("acctHsn").value.trim(),
+      gstRate: parseFloat(document.getElementById("acctGstRate").value) || 18,
+      notes: document.getElementById("acctNotes").value.trim(),
+    };
+    await runWithBusyButton(confirmBtn, async () => {
+      try {
+        const saved = await upsertRenewalAccount(payload);
+        const idx = renewalAccounts.findIndex((x) => x.id === saved.id);
+        if (idx >= 0) renewalAccounts[idx] = saved;
+        else renewalAccounts.push(saved);
+        closeModal();
+        showToast(`✓ Account "${saved.name}" saved`);
+        render();
+      } catch (err) {
+        showToast(err.message || "Save failed.", true);
+      }
+    }, "Saving…");
+  });
+}
+
+/* ============================================================
+   SUB-PAGE: SETTINGS (Seller profile)
+   ============================================================ */
+function renderRenewalSettingsSubPage() {
+  const perms = getUserPerms(currentUser);
+  const isAdmin = perms?.isAdmin;
+  if (!isAdmin) {
+    app.innerHTML = `
+      ${renderHeader("Renewal Tracker — Settings", "Admin only")}
+      <main class="main">
+        ${renderRenewalSubNav("settings", false)}
+        <section class="card"><h2>Access denied</h2><p>Only admin can configure seller profile.</p></section>
+      </main>
+    `;
+    bindRenewalSubNav();
+    bindLogout();
+    return;
+  }
+
+  const p = sellerProfile || {};
+
+  app.innerHTML = `
+    ${renderHeader("Renewal Tracker — Settings", "Seller business profile for documents")}
+    <main class="main">
+      ${renderAdminNav("renewals")}
+      ${renderRenewalSubNav("settings", true)}
+
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <h2>🏢 Seller Profile</h2>
+            <p class="section-subtitle">This info appears on all PIs, invoices, and receipts you generate.</p>
+          </div>
+        </div>
+
+        <div class="payment-form">
+          <h3 style="margin-top: 0.5rem; color: #475569;">Business Info</h3>
+          <div class="form-row">
+            <label>Business Name <span class="required">*</span></label>
+            <input type="text" id="sp_businessName" value="${escapeHtml(p.businessName || '')}" required />
+          </div>
+          <div class="form-row-grid">
+            <div class="form-row">
+              <label>GSTIN</label>
+              <input type="text" id="sp_gstin" value="${escapeHtml(p.gstin || '')}" placeholder="22AAAAA0000A1Z5" />
+            </div>
+            <div class="form-row">
+              <label>PAN</label>
+              <input type="text" id="sp_pan" value="${escapeHtml(p.pan || '')}" />
+            </div>
+          </div>
+          <div class="form-row">
+            <label>Address</label>
+            <textarea id="sp_address" rows="2">${escapeHtml(p.address || '')}</textarea>
+          </div>
+          <div class="form-row-grid">
+            <div class="form-row">
+              <label>City</label>
+              <input type="text" id="sp_city" value="${escapeHtml(p.city || '')}" />
+            </div>
+            <div class="form-row">
+              <label>Pincode</label>
+              <input type="text" id="sp_pincode" value="${escapeHtml(p.pincode || '')}" />
+            </div>
+          </div>
+          <div class="form-row-grid">
+            <div class="form-row">
+              <label>State</label>
+              <input type="text" id="sp_state" value="${escapeHtml(p.state || '')}" />
+            </div>
+            <div class="form-row">
+              <label>State Code <span class="required">*</span></label>
+              <input type="text" id="sp_stateCode" value="${escapeHtml(p.stateCode || '')}" placeholder="22" maxlength="2" />
+            </div>
+          </div>
+          <div class="form-row-grid">
+            <div class="form-row">
+              <label>Phone</label>
+              <input type="text" id="sp_phone" value="${escapeHtml(p.contactPhone || '')}" />
+            </div>
+            <div class="form-row">
+              <label>Email</label>
+              <input type="email" id="sp_email" value="${escapeHtml(p.contactEmail || '')}" />
+            </div>
+          </div>
+          <div class="form-row">
+            <label>Website</label>
+            <input type="text" id="sp_website" value="${escapeHtml(p.website || '')}" />
+          </div>
+
+          <h3 style="margin-top: 1rem; color: #475569;">Bank Details (for payment on PI)</h3>
+          <div class="form-row">
+            <label>Bank Name</label>
+            <input type="text" id="sp_bankName" value="${escapeHtml(p.bankName || '')}" />
+          </div>
+          <div class="form-row-grid">
+            <div class="form-row">
+              <label>Account Holder</label>
+              <input type="text" id="sp_bankHolder" value="${escapeHtml(p.bankAccountHolder || '')}" />
+            </div>
+            <div class="form-row">
+              <label>Account No</label>
+              <input type="text" id="sp_bankAccount" value="${escapeHtml(p.bankAccountNo || '')}" />
+            </div>
+          </div>
+          <div class="form-row-grid">
+            <div class="form-row">
+              <label>IFSC</label>
+              <input type="text" id="sp_bankIfsc" value="${escapeHtml(p.bankIfsc || '')}" />
+            </div>
+            <div class="form-row">
+              <label>Branch</label>
+              <input type="text" id="sp_bankBranch" value="${escapeHtml(p.bankBranch || '')}" />
+            </div>
+          </div>
+
+          <h3 style="margin-top: 1rem; color: #475569;">Signature & Terms</h3>
+          <div class="form-row-grid">
+            <div class="form-row">
+              <label>Signatory Name</label>
+              <input type="text" id="sp_sigName" value="${escapeHtml(p.signatureName || '')}" placeholder="e.g. Abhinav Mishra" />
+            </div>
+            <div class="form-row">
+              <label>Designation</label>
+              <input type="text" id="sp_sigDesig" value="${escapeHtml(p.signatureDesignation || '')}" placeholder="e.g. Proprietor" />
+            </div>
+          </div>
+          <div class="form-row">
+            <label>Terms & Conditions (shown on PI)</label>
+            <textarea id="sp_terms" rows="3" placeholder="e.g. Payment due within 7 days. Subject to Raipur jurisdiction.">${escapeHtml(p.termsText || '')}</textarea>
+          </div>
+
+          <div class="modal-actions" style="justify-content: flex-start;">
+            <button type="button" class="btn btn-primary" id="saveSellerProfileBtn">💾 Save Profile</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  `;
+
+  bindAdminNav();
+  bindRenewalSubNav();
+  bindLogout();
+
+  document.getElementById("saveSellerProfileBtn")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const name = document.getElementById("sp_businessName").value.trim();
+    if (!name) { showToast("Business name required.", true); return; }
+    const payload = {
+      id: p.id,
+      businessName: name,
+      gstin: document.getElementById("sp_gstin").value.trim(),
+      pan: document.getElementById("sp_pan").value.trim(),
+      address: document.getElementById("sp_address").value.trim(),
+      city: document.getElementById("sp_city").value.trim(),
+      state: document.getElementById("sp_state").value.trim(),
+      stateCode: document.getElementById("sp_stateCode").value.trim(),
+      pincode: document.getElementById("sp_pincode").value.trim(),
+      contactPhone: document.getElementById("sp_phone").value.trim(),
+      contactEmail: document.getElementById("sp_email").value.trim(),
+      website: document.getElementById("sp_website").value.trim(),
+      bankName: document.getElementById("sp_bankName").value.trim(),
+      bankAccountHolder: document.getElementById("sp_bankHolder").value.trim(),
+      bankAccountNo: document.getElementById("sp_bankAccount").value.trim(),
+      bankIfsc: document.getElementById("sp_bankIfsc").value.trim(),
+      bankBranch: document.getElementById("sp_bankBranch").value.trim(),
+      signatureName: document.getElementById("sp_sigName").value.trim(),
+      signatureDesignation: document.getElementById("sp_sigDesig").value.trim(),
+      termsText: document.getElementById("sp_terms").value.trim(),
+      updatedBy: currentUser,
+    };
+    await runWithBusyButton(btn, async () => {
+      try {
+        sellerProfile = await upsertSellerProfile(payload);
+        showToast("✓ Seller profile saved");
+        render();
+      } catch (err) {
+        showToast(err.message || "Save failed.", true);
+      }
+    }, "Saving…");
+  });
+}
+
+/* ============================================================
+   SUB-PAGE: DOCUMENTS LIST
+   ============================================================ */
+function renderRenewalDocumentsSubPage() {
+  const perms = getUserPerms(currentUser);
+  const isAdmin = perms?.isAdmin;
+  const docs = [...renewalDocuments];
+  const typeLabel = { PI: "📝 PI", INV: "🧾 Tax Invoice", R: "🧾 Receipt" };
+
+  app.innerHTML = `
+    ${renderHeader("Renewal Tracker — Documents", `${docs.length} documents generated`)}
+    <main class="main">
+      ${isAdmin ? renderAdminNav("renewals") : ""}
+      ${renderRenewalSubNav("documents", isAdmin)}
+
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <h2>Generated Documents</h2>
+            <p class="section-subtitle">All PIs, invoices, and receipts you've created. Click to view/print again.</p>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Number</th>
+                <th>Account</th>
+                <th>Vehicles</th>
+                <th>Total ₹</th>
+                <th>By</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${docs.length === 0 ? `
+                <tr class="empty-row"><td colspan="8">No documents generated yet. Go to Vehicles tab, select some, and click Create PI/Invoice/Receipt.</td></tr>
+              ` : docs.map((d) => `
+                <tr>
+                  <td class="date-cell">${formatDateIndian(d.docDate)}</td>
+                  <td>${typeLabel[d.docType] || d.docType}</td>
+                  <td class="mono"><strong>${escapeHtml(d.docNumber)}</strong></td>
+                  <td>${escapeHtml(d.accountName || "—")}</td>
+                  <td>${(d.vehicles || []).length}</td>
+                  <td><strong>₹${d.total.toLocaleString("en-IN")}</strong></td>
+                  <td>${escapeHtml(d.createdBy || "?")}</td>
+                  <td class="row-actions">
+                    <button type="button" class="btn btn-primary btn-sm reopen-doc-btn" data-id="${escapeHtml(d.id)}">👁 View / Print</button>
+                    ${isAdmin ? `<button type="button" class="btn btn-outline btn-sm delete-doc-btn" data-id="${escapeHtml(d.id)}">🗑</button>` : ""}
+                  </td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  `;
+
+  if (isAdmin) bindAdminNav();
+  bindRenewalSubNav();
+  bindLogout();
+
+  app.querySelectorAll(".reopen-doc-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const d = renewalDocuments.find((x) => x.id === btn.dataset.id);
+      if (d?.htmlSnapshot) openDocumentPrintWindow(d.htmlSnapshot, d.docNumber);
+      else showToast("Document HTML not saved.", true);
+    });
+  });
+  app.querySelectorAll(".delete-doc-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Delete this document? This cannot be undone.")) return;
+      try {
+        await deleteRenewalDocument(btn.dataset.id);
+        renewalDocuments = renewalDocuments.filter((x) => x.id !== btn.dataset.id);
+        showToast("✓ Deleted");
+        render();
+      } catch (err) {
+        showToast(err.message || "Delete failed.", true);
+      }
+    });
+  });
+}
+
+/* ============================================================
+   BULK ACCOUNT ASSIGNMENT
+   ============================================================ */
+function openBulkAccountAssignModal() {
+  const count = selectedVehicleIds.size;
+  if (count === 0) { showToast("No vehicles selected.", true); return; }
+  const sorted = [...renewalAccounts].sort((a, b) => a.name.localeCompare(b.name));
+
+  modal.innerHTML = `
+    <h3>🔗 Assign Account to ${count} vehicles</h3>
+    <p class="modal-desc">Link selected vehicles to an existing customer account.</p>
+    <div class="payment-form">
+      <div class="form-row">
+        <label>Account <span class="required">*</span></label>
+        <select id="bulkAcctSelect">
+          <option value="">— Choose account —</option>
+          <option value="UNASSIGN">(Unassign — remove account link)</option>
+          ${sorted.map((a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}${a.isGstRegistered ? ' [GST]' : ' [Non-GST]'}</option>`).join("")}
+        </select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
+      <button type="button" class="btn btn-primary modal-confirm">Assign</button>
+    </div>
+  `;
+  modalOverlay.classList.remove("hidden");
+  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+  modalOverlay.onclick = (e) => { if (e.target === modalOverlay) closeModal(); };
+
+  const confirmBtn = modal.querySelector(".modal-confirm");
+  confirmBtn.addEventListener("click", async () => {
+    const sel = document.getElementById("bulkAcctSelect").value;
+    if (!sel) { showToast("Select an account.", true); return; }
+    const accountId = sel === "UNASSIGN" ? null : sel;
+    await runWithBusyButton(confirmBtn, async () => {
+      try {
+        const ids = Array.from(selectedVehicleIds);
+        await bulkUpdateRenewalAccountLinks(ids, accountId);
+        await refreshAllData();
+        selectedVehicleIds.clear();
+        closeModal();
+        showToast(`✓ Updated ${ids.length} vehicles`);
+        render();
+      } catch (err) {
+        showToast(err.message || "Assign failed.", true);
+      }
+    }, "Saving…");
+  });
+}
+
+/* ============================================================
+   DOCUMENT GENERATION
+   ============================================================ */
+function openDocGenerationModal(docType) {
+  const count = selectedVehicleIds.size;
+  if (count === 0) { showToast("Select vehicles first.", true); return; }
+
+  if (!sellerProfile || !sellerProfile.businessName) {
+    showToast("⚠️ Set up Seller Profile first (Settings tab).", true);
+    return;
+  }
+
+  // Get selected vehicles
+  const selectedRenewals = renewals.filter((r) => selectedVehicleIds.has(r.id));
+
+  // Group by account
+  const accountGroups = {};
+  selectedRenewals.forEach((r) => {
+    const key = r.accountId || `_company:${r.company || "UNKNOWN"}`;
+    if (!accountGroups[key]) accountGroups[key] = [];
+    accountGroups[key].push(r);
+  });
+
+  const keys = Object.keys(accountGroups);
+  if (keys.length > 1) {
+    showToast("⚠️ Selected vehicles belong to multiple accounts. Please filter to one account before generating a document.", true);
+    return;
+  }
+
+  const groupKey = keys[0];
+  let account;
+  if (groupKey.startsWith("_company:")) {
+    const companyName = groupKey.slice(9);
+    account = renewalAccounts.find((a) => a.name === companyName);
+    if (!account) {
+      showToast(`⚠️ No account found for "${companyName}". Create account first in Accounts tab.`, true);
+      return;
+    }
+  } else {
+    account = renewalAccounts.find((a) => a.id === groupKey);
+    if (!account) {
+      showToast("Account not found.", true);
+      return;
+    }
+  }
+
+  // Validate GST/Non-GST matches docType
+  if (docType === "INV" && !account.isGstRegistered) {
+    showToast(`⚠️ ${account.name} is not GST registered. Use Receipt instead.`, true);
+    return;
+  }
+  if (docType === "R" && account.isGstRegistered) {
+    showToast(`⚠️ ${account.name} is GST registered. Use Tax Invoice instead.`, true);
+    return;
+  }
+
+  // Build line items
+  const defaultRate = account.defaultRatePerYear || 500;
+  const lineItems = selectedRenewals.map((r) => {
+    const status = computeRenewalStatus(r);
+    return {
+      renewalId: r.id,
+      plateNumber: r.plateNumber,
+      vehicleName: r.vehicleName,
+      imei: r.imei,
+      simNumber: r.simNumber,
+      year: status.oldestUnpaidYear || status.currentYear,
+      periodStart: formatYMD(status.cycleStart),
+      periodEnd: formatYMD(status.cycleEnd),
+      rate: defaultRate,
+    };
+  });
+
+  const docLabel = { PI: "Proforma Invoice", INV: "Tax Invoice", R: "Receipt" }[docType];
+
+  modal.innerHTML = `
+    <h3>Create ${docLabel} — ${account.name}</h3>
+    <p class="modal-desc">Review line items and totals. You can adjust rate per vehicle if needed.</p>
+
+    <div class="doc-gen-grid">
+      <div class="form-row">
+        <label>Doc Date</label>
+        <input type="date" id="doc_date" value="${formatYMD(new Date())}" />
+      </div>
+      <div class="form-row">
+        <label>Rate per SIM/Year (₹)</label>
+        <input type="number" id="doc_rate" value="${defaultRate}" min="0" />
+      </div>
+      <div class="form-row">
+        <label>GST Rate (%)</label>
+        <input type="number" id="doc_gstRate" value="${account.gstRate || 18}" min="0" max="28" step="0.01" />
+      </div>
+      <div class="form-row">
+        <label>HSN/SAC</label>
+        <input type="text" id="doc_hsn" value="${escapeHtml(account.hsnCode || '998412')}" />
+      </div>
+    </div>
+
+    <div class="doc-items-preview">
+      <h4>Line Items (${lineItems.length})</h4>
+      <div class="doc-items-list">
+        ${lineItems.map((li, i) => `
+          <div class="doc-item-row">
+            <span>${i + 1}. ${escapeHtml(li.plateNumber)} · Y${li.year}</span>
+            <span class="mono">${escapeHtml(li.imei)}</span>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+
+    <div id="docTotalsPreview" class="doc-totals-preview"></div>
+
+    ${docType === "R" ? `
+      <div class="form-row">
+        <label>Payment Mode <span class="required">*</span></label>
+        <select id="doc_payMode" required>
+          <option value="cash">💵 Cash</option>
+          <option value="upi">📱 UPI</option>
+          <option value="bank">🏦 Bank Transfer</option>
+          <option value="cheque">📄 Cheque</option>
+        </select>
+      </div>
+    ` : ""}
+
+    <div class="form-row">
+      <label>Notes</label>
+      <textarea id="doc_notes" rows="2" placeholder="Any additional notes..."></textarea>
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
+      <button type="button" class="btn btn-primary modal-confirm">📄 Generate ${docLabel}</button>
+    </div>
+  `;
+  modalOverlay.classList.remove("hidden");
+  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+  modalOverlay.onclick = (e) => { if (e.target === modalOverlay) closeModal(); };
+
+  const refreshTotals = () => {
+    const rate = parseFloat(document.getElementById("doc_rate").value) || 0;
+    const gstRate = parseFloat(document.getElementById("doc_gstRate").value) || 0;
+    const subtotal = rate * lineItems.length;
+    let cgst = 0, sgst = 0, igst = 0;
+    if (docType === "INV") {
+      const sameState = (sellerProfile.stateCode || "").trim() === (account.stateCode || "").trim();
+      if (sameState) {
+        cgst = subtotal * (gstRate / 2) / 100;
+        sgst = subtotal * (gstRate / 2) / 100;
+      } else {
+        igst = subtotal * gstRate / 100;
+      }
+    }
+    const total = subtotal + cgst + sgst + igst;
+    document.getElementById("docTotalsPreview").innerHTML = `
+      <div class="totals-row"><span>Subtotal:</span><strong>₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
+      ${docType === "INV" ? (igst > 0 ? `
+        <div class="totals-row"><span>IGST (${gstRate}%):</span><strong>₹${igst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
+      ` : `
+        <div class="totals-row"><span>CGST (${gstRate/2}%):</span><strong>₹${cgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
+        <div class="totals-row"><span>SGST (${gstRate/2}%):</span><strong>₹${sgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
+      `) : ""}
+      <div class="totals-row totals-grand"><span>Grand Total:</span><strong>₹${total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
+    `;
+    return { subtotal, cgst, sgst, igst, total, rate, gstRate };
+  };
+  refreshTotals();
+  ["doc_rate", "doc_gstRate"].forEach((id) => {
+    document.getElementById(id)?.addEventListener("input", refreshTotals);
+  });
+
+  const confirmBtn = modal.querySelector(".modal-confirm");
+  confirmBtn.addEventListener("click", async () => {
+    const totals = refreshTotals();
+    const docDate = document.getElementById("doc_date").value;
+    const hsn = document.getElementById("doc_hsn").value.trim();
+    const notes = document.getElementById("doc_notes").value.trim();
+    const paymentMode = document.getElementById("doc_payMode")?.value || null;
+
+    await runWithBusyButton(confirmBtn, async () => {
+      try {
+        // Generate doc number
+        const dateObj = new Date(docDate);
+        let period;
+        if (docType === "R") {
+          // Financial year YY-YY (Apr-Mar)
+          const m = dateObj.getMonth();
+          const y = dateObj.getFullYear();
+          const fyStart = m >= 3 ? y : y - 1;
+          period = `${String(fyStart).slice(-2)}-${String(fyStart + 1).slice(-2)}`;
+        } else {
+          // YY/MM
+          period = `${String(dateObj.getFullYear()).slice(-2)}/${String(dateObj.getMonth() + 1).padStart(2, "0")}`;
+        }
+        const num = await getNextDocNumber(docType, period);
+        const docNumber = `${docType}/${period}/${String(num).padStart(3, "0")}`;
+
+        // Finalize line items with current rate
+        const finalItems = lineItems.map((li) => ({ ...li, rate: totals.rate }));
+
+        // Build HTML
+        const html = buildDocumentHTML(docType, {
+          docNumber,
+          docDate,
+          account,
+          seller: sellerProfile,
+          lineItems: finalItems,
+          subtotal: totals.subtotal,
+          cgst: totals.cgst,
+          sgst: totals.sgst,
+          igst: totals.igst,
+          total: totals.total,
+          hsnCode: hsn,
+          gstRate: totals.gstRate,
+          paymentMode,
+          notes,
+        });
+
+        // Save to DB
+        const docRecord = {
+          docType,
+          docNumber,
+          docDate,
+          accountId: account.id,
+          accountName: account.name,
+          accountGstin: account.gstin,
+          vehicles: finalItems,
+          subtotal: totals.subtotal,
+          cgst: totals.cgst,
+          sgst: totals.sgst,
+          igst: totals.igst,
+          total: totals.total,
+          hsnCode: hsn,
+          gstRate: totals.gstRate,
+          paymentMode,
+          linkedPayments: [],
+          notes,
+          htmlSnapshot: html,
+          createdBy: currentUser,
+        };
+        const saved = await createRenewalDocument(docRecord);
+        renewalDocuments.unshift(saved);
+
+        closeModal();
+        selectedVehicleIds.clear();
+        showToast(`✓ ${docLabel} ${docNumber} created`);
+        openDocumentPrintWindow(html, docNumber);
+        render();
+      } catch (err) {
+        showToast(err.message || "Document generation failed.", true);
+      }
+    }, "Generating…");
+  });
+}
+
+/* ============================================================
+   DOCUMENT HTML BUILDER
+   ============================================================ */
+function buildDocumentHTML(docType, d) {
+  const typeTitle = { PI: "PROFORMA INVOICE", INV: "TAX INVOICE", R: "RECEIPT" }[docType];
+  const seller = d.seller || {};
+  const acct = d.account || {};
+  const sameState = (seller.stateCode || "").trim() === (acct.stateCode || "").trim();
+  const amountInWords = numToWords(Math.round(d.total));
+
+  const itemsHtml = d.lineItems.map((li, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td>${escapeHtml(li.plateNumber)}<br><span class="small">${escapeHtml(li.vehicleName || "")}</span></td>
+      <td class="mono small">${escapeHtml(li.imei)}</td>
+      <td class="mono small">${escapeHtml(li.simNumber)}</td>
+      <td>Y${li.year}</td>
+      <td class="small">${formatDateIndian(li.periodStart)} → ${formatDateIndian(li.periodEnd)}</td>
+      <td class="right">₹${Number(li.rate).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+    </tr>
+  `).join("");
+
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${typeTitle} — ${d.docNumber}</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #000; font-size: 11px; line-height: 1.4; }
+  .doc-wrap { max-width: 100%; }
+  .doc-title { text-align: center; font-size: 14px; font-weight: 700; letter-spacing: 2px; padding: 6px; background: #000; color: #fff; margin-bottom: 10px; }
+  .header-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+  .header-tbl td { padding: 6px 10px; vertical-align: top; border: 1px solid #000; }
+  .seller-name { font-size: 15px; font-weight: 700; }
+  .doc-meta { text-align: right; }
+  .doc-meta div { margin-bottom: 2px; }
+  .doc-meta strong { font-size: 12px; }
+
+  .parties { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+  .parties td { width: 50%; padding: 8px 10px; border: 1px solid #000; vertical-align: top; }
+  .party-label { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .party-name { font-weight: 700; font-size: 12px; margin-bottom: 2px; }
+
+  .items-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+  .items-tbl th, .items-tbl td { padding: 5px 6px; border: 1px solid #000; text-align: left; font-size: 10px; }
+  .items-tbl th { background: #e5e5e5; font-weight: 700; text-transform: uppercase; font-size: 9px; }
+  .items-tbl .right { text-align: right; }
+  .items-tbl .small { font-size: 9px; color: #333; }
+  .mono { font-family: 'Courier New', monospace; }
+
+  .totals-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+  .totals-tbl td { padding: 5px 10px; border: 1px solid #000; font-size: 11px; }
+  .totals-tbl .label { text-align: right; width: 70%; font-weight: 600; }
+  .totals-tbl .value { text-align: right; width: 30%; }
+  .totals-tbl .grand-total { background: #000; color: #fff; font-weight: 700; font-size: 13px; }
+
+  .words-row { padding: 6px 10px; border: 1px solid #000; font-size: 10px; margin-bottom: 10px; background: #f5f5f5; }
+  .words-row strong { font-style: italic; }
+
+  .bank-sig { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+  .bank-sig td { border: 1px solid #000; padding: 8px 10px; vertical-align: top; width: 50%; }
+  .bank-sig .mini-label { font-size: 9px; color: #555; margin-bottom: 2px; }
+
+  .terms { padding: 8px 10px; border: 1px solid #000; font-size: 9px; margin-bottom: 10px; }
+  .terms h4 { font-size: 10px; margin-bottom: 4px; }
+
+  .sig-area { text-align: right; padding-top: 40px; }
+  .sig-line { border-top: 1px solid #000; display: inline-block; min-width: 150px; margin-top: 30px; padding-top: 2px; font-weight: 600; }
+
+  .no-print { padding: 10px; background: #0891b2; color: white; text-align: center; }
+  .no-print button { background: white; color: #0891b2; border: none; padding: 6px 14px; border-radius: 4px; font-weight: 700; cursor: pointer; margin: 0 4px; }
+  @media print { .no-print { display: none; } }
+</style>
+</head>
+<body>
+<div class="no-print">
+  <strong>${typeTitle} · ${d.docNumber}</strong> &nbsp;
+  <button onclick="window.print()">🖨 Print / Save as PDF</button>
+  <button onclick="window.close()">✕ Close</button>
+</div>
+
+<div class="doc-wrap">
+  <div class="doc-title">${typeTitle}</div>
+
+  <table class="header-tbl">
+    <tr>
+      <td style="width: 60%;">
+        <div class="seller-name">${escapeHtml(seller.businessName || "")}</div>
+        <div>${escapeHtml(seller.address || "")}</div>
+        <div>${escapeHtml([seller.city, seller.state, seller.pincode].filter(Boolean).join(", "))}</div>
+        ${seller.gstin ? `<div><strong>GSTIN:</strong> ${escapeHtml(seller.gstin)}</div>` : ""}
+        ${seller.pan ? `<div><strong>PAN:</strong> ${escapeHtml(seller.pan)}</div>` : ""}
+        ${seller.contactPhone ? `<div>📞 ${escapeHtml(seller.contactPhone)}${seller.contactEmail ? ` · ✉️ ${escapeHtml(seller.contactEmail)}` : ""}</div>` : ""}
+      </td>
+      <td style="width: 40%;" class="doc-meta">
+        <div><strong>${docType === "R" ? "Receipt" : docType === "PI" ? "PI" : "Invoice"} No:</strong><br>${escapeHtml(d.docNumber)}</div>
+        <div style="margin-top: 6px;"><strong>Date:</strong><br>${formatDateIndian(d.docDate)}</div>
+        ${docType === "PI" ? '<div style="margin-top: 6px;"><strong>Valid for:</strong><br>30 days</div>' : ""}
+      </td>
+    </tr>
+  </table>
+
+  <table class="parties">
+    <tr>
+      <td>
+        <div class="party-label">${docType === "R" ? "Received From" : "Bill To"}</div>
+        <div class="party-name">${escapeHtml(acct.name)}</div>
+        ${acct.address ? `<div>${escapeHtml(acct.address)}</div>` : ""}
+        <div>${escapeHtml([acct.city, acct.state, acct.pincode].filter(Boolean).join(", "))}</div>
+        ${acct.gstin ? `<div><strong>GSTIN:</strong> ${escapeHtml(acct.gstin)}</div>` : ""}
+        ${acct.pan ? `<div><strong>PAN:</strong> ${escapeHtml(acct.pan)}</div>` : ""}
+        ${acct.phone ? `<div>📞 ${escapeHtml(acct.phone)}</div>` : ""}
+      </td>
+      <td>
+        <div class="party-label">Supply Details</div>
+        <div><strong>Place of Supply:</strong> ${escapeHtml(acct.state || "—")}${acct.stateCode ? ` (${escapeHtml(acct.stateCode)})` : ""}</div>
+        <div><strong>HSN/SAC:</strong> ${escapeHtml(d.hsnCode || "")}</div>
+        <div><strong>Service:</strong> SIM subscription renewal</div>
+        ${docType !== "R" ? `<div><strong>Tax Type:</strong> ${sameState ? "CGST + SGST (intra-state)" : "IGST (inter-state)"}</div>` : ""}
+      </td>
+    </tr>
+  </table>
+
+  <table class="items-tbl">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Vehicle</th>
+        <th>IMEI</th>
+        <th>SIM</th>
+        <th>Year</th>
+        <th>Period</th>
+        <th class="right">Amount</th>
+      </tr>
+    </thead>
+    <tbody>${itemsHtml}</tbody>
+  </table>
+
+  <table class="totals-tbl">
+    <tr>
+      <td class="label">Subtotal</td>
+      <td class="value">₹${d.subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+    </tr>
+    ${d.cgst > 0 ? `
+    <tr>
+      <td class="label">CGST @ ${d.gstRate / 2}%</td>
+      <td class="value">₹${d.cgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+    </tr>
+    <tr>
+      <td class="label">SGST @ ${d.gstRate / 2}%</td>
+      <td class="value">₹${d.sgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+    </tr>
+    ` : ""}
+    ${d.igst > 0 ? `
+    <tr>
+      <td class="label">IGST @ ${d.gstRate}%</td>
+      <td class="value">₹${d.igst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+    </tr>
+    ` : ""}
+    <tr class="grand-total">
+      <td class="label">GRAND TOTAL</td>
+      <td class="value">₹${d.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+    </tr>
+  </table>
+
+  <div class="words-row">
+    <strong>Amount in words:</strong> ${escapeHtml(amountInWords)} Rupees Only
+  </div>
+
+  ${docType === "R" && d.paymentMode ? `
+  <div class="words-row" style="background: #ecfdf5;">
+    <strong>Payment Mode:</strong> ${escapeHtml(d.paymentMode.toUpperCase())}
+  </div>
+  ` : ""}
+
+  <table class="bank-sig">
+    <tr>
+      <td>
+        ${docType === "PI" ? `
+          <div class="mini-label">BANK DETAILS (for payment)</div>
+          <div><strong>${escapeHtml(seller.bankName || "")}</strong></div>
+          <div>A/c Holder: ${escapeHtml(seller.bankAccountHolder || "")}</div>
+          <div>A/c No: <span class="mono">${escapeHtml(seller.bankAccountNo || "")}</span></div>
+          <div>IFSC: <span class="mono">${escapeHtml(seller.bankIfsc || "")}</span></div>
+          <div>Branch: ${escapeHtml(seller.bankBranch || "")}</div>
+        ` : docType === "R" ? `
+          <div class="mini-label">RECEIVED WITH THANKS</div>
+          <div style="margin-top: 20px; font-size: 10px;">Received the sum of <strong>₹${d.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong> towards SIM subscription renewal for the vehicles listed above.</div>
+        ` : `
+          <div class="mini-label">DECLARATION</div>
+          <div style="font-size: 9px; margin-top: 4px;">We declare that this invoice shows the actual price of the goods/services described and that all particulars are true and correct.</div>
+        `}
+      </td>
+      <td class="sig-area">
+        <div style="font-size: 10px;">For <strong>${escapeHtml(seller.businessName || "")}</strong></div>
+        <div class="sig-line">
+          ${escapeHtml(seller.signatureName || "Authorised Signatory")}
+          ${seller.signatureDesignation ? `<br><span style="font-weight: 400; font-size: 9px;">${escapeHtml(seller.signatureDesignation)}</span>` : ""}
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  ${seller.termsText ? `
+  <div class="terms">
+    <h4>TERMS & CONDITIONS</h4>
+    <div>${escapeHtml(seller.termsText).replace(/\n/g, "<br>")}</div>
+  </div>
+  ` : ""}
+
+  ${d.notes ? `
+  <div class="terms">
+    <h4>NOTES</h4>
+    <div>${escapeHtml(d.notes).replace(/\n/g, "<br>")}</div>
+  </div>
+  ` : ""}
+
+  <div style="text-align: center; font-size: 9px; color: #666; margin-top: 10px;">
+    This is a computer-generated document. Generated on ${new Date().toLocaleString("en-IN")}.
+  </div>
+</div>
+</body>
+</html>`;
+}
+
+function openDocumentPrintWindow(html, title) {
+  const win = window.open("", "_blank", "width=900,height=1100");
+  if (!win) {
+    showToast("Popup blocked — allow popups for this site.", true);
+    return;
+  }
+  win.document.write(html);
+  win.document.close();
+  win.document.title = title || "Document";
+}
+
+/* Number to words (Indian system — thousands, lakhs, crores) */
+function numToWords(n) {
+  if (n === 0) return "Zero";
+  const a = ["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
+  const b = ["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
+  const inWords = (num) => {
+    if (num < 20) return a[num];
+    if (num < 100) return b[Math.floor(num / 10)] + (num % 10 ? " " + a[num % 10] : "");
+    if (num < 1000) return a[Math.floor(num / 100)] + " Hundred" + (num % 100 ? " " + inWords(num % 100) : "");
+    return "";
+  };
+  n = Math.abs(Math.round(n));
+  const crore = Math.floor(n / 10000000);
+  n %= 10000000;
+  const lakh = Math.floor(n / 100000);
+  n %= 100000;
+  const thousand = Math.floor(n / 1000);
+  n %= 1000;
+  const hundred = n;
+  let out = "";
+  if (crore) out += inWords(crore) + " Crore ";
+  if (lakh) out += inWords(lakh) + " Lakh ";
+  if (thousand) out += inWords(thousand) + " Thousand ";
+  if (hundred) out += inWords(hundred);
+  return out.trim();
 }
 
 initApp();

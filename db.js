@@ -1024,6 +1024,7 @@ function rowToRenewal(row) {
     lastUploadedAt: row.last_uploaded_at,
     lastUploadedBy: row.last_uploaded_by,
     notes: row.notes || "",
+    accountId: row.account_id || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1112,4 +1113,297 @@ async function deleteRenewal(id) {
     throw new Error("Delete had no effect. Permission denied or row missing.");
   }
   return true;
+}
+
+/* ============================================================
+   v3.9.0 — RENEWAL ACCOUNTS, SELLER PROFILE, DOCUMENTS
+   ============================================================ */
+
+/* ---- Accounts ---- */
+function rowToRenewalAccount(row) {
+  return {
+    id: row.id,
+    name: row.name || "",
+    isGstRegistered: !!row.is_gst_registered,
+    gstin: row.gstin || "",
+    pan: row.pan || "",
+    address: row.address || "",
+    city: row.city || "",
+    state: row.state || "",
+    stateCode: row.state_code || "",
+    pincode: row.pincode || "",
+    contactPerson: row.contact_person || "",
+    phone: row.phone || "",
+    email: row.email || "",
+    defaultRatePerYear: Number(row.default_rate_per_year) || 0,
+    hsnCode: row.hsn_code || "998412",
+    gstRate: Number(row.gst_rate) || 18,
+    notes: row.notes || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function renewalAccountToRow(a) {
+  return {
+    name: a.name || "",
+    is_gst_registered: !!a.isGstRegistered,
+    gstin: a.gstin || null,
+    pan: a.pan || null,
+    address: a.address || null,
+    city: a.city || null,
+    state: a.state || null,
+    state_code: a.stateCode || null,
+    pincode: a.pincode || null,
+    contact_person: a.contactPerson || null,
+    phone: a.phone || null,
+    email: a.email || null,
+    default_rate_per_year: Number(a.defaultRatePerYear) || 0,
+    hsn_code: a.hsnCode || "998412",
+    gst_rate: Number(a.gstRate) || 18,
+    notes: a.notes || null,
+  };
+}
+
+async function fetchRenewalAccounts() {
+  const { data, error } = await getDb()
+    .from("renewal_accounts")
+    .select("*")
+    .order("name", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data || []).map(rowToRenewalAccount);
+}
+
+async function upsertRenewalAccount(account) {
+  const row = renewalAccountToRow(account);
+  if (account.id) row.id = account.id;
+  const { data, error } = await getDb()
+    .from("renewal_accounts")
+    .upsert(row, { onConflict: "name" })
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return rowToRenewalAccount(data);
+}
+
+async function deleteRenewalAccount(id) {
+  const { data, error } = await getDb()
+    .from("renewal_accounts")
+    .delete()
+    .eq("id", id)
+    .select();
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) {
+    throw new Error("Delete had no effect. Permission denied or row missing.");
+  }
+  return true;
+}
+
+/* ---- Seller profile ---- */
+function rowToSellerProfile(row) {
+  return {
+    id: row.id,
+    businessName: row.business_name || "",
+    gstin: row.gstin || "",
+    pan: row.pan || "",
+    address: row.address || "",
+    city: row.city || "",
+    state: row.state || "",
+    stateCode: row.state_code || "",
+    pincode: row.pincode || "",
+    contactPhone: row.contact_phone || "",
+    contactEmail: row.contact_email || "",
+    website: row.website || "",
+    bankName: row.bank_name || "",
+    bankAccountNo: row.bank_account_no || "",
+    bankIfsc: row.bank_ifsc || "",
+    bankBranch: row.bank_branch || "",
+    bankAccountHolder: row.bank_account_holder || "",
+    logoUrl: row.logo_url || "",
+    signatureName: row.signature_name || "",
+    signatureDesignation: row.signature_designation || "",
+    termsText: row.terms_text || "",
+    updatedAt: row.updated_at,
+    updatedBy: row.updated_by,
+  };
+}
+
+function sellerProfileToRow(p) {
+  return {
+    business_name: p.businessName || "",
+    gstin: p.gstin || null,
+    pan: p.pan || null,
+    address: p.address || null,
+    city: p.city || null,
+    state: p.state || null,
+    state_code: p.stateCode || null,
+    pincode: p.pincode || null,
+    contact_phone: p.contactPhone || null,
+    contact_email: p.contactEmail || null,
+    website: p.website || null,
+    bank_name: p.bankName || null,
+    bank_account_no: p.bankAccountNo || null,
+    bank_ifsc: p.bankIfsc || null,
+    bank_branch: p.bankBranch || null,
+    bank_account_holder: p.bankAccountHolder || null,
+    logo_url: p.logoUrl || null,
+    signature_name: p.signatureName || null,
+    signature_designation: p.signatureDesignation || null,
+    terms_text: p.termsText || null,
+    updated_by: p.updatedBy || null,
+  };
+}
+
+async function fetchSellerProfile() {
+  const { data, error } = await getDb()
+    .from("renewal_seller_profile")
+    .select("*")
+    .limit(1);
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) return null;
+  return rowToSellerProfile(data[0]);
+}
+
+async function upsertSellerProfile(profile) {
+  const row = sellerProfileToRow(profile);
+  if (profile.id) {
+    row.id = profile.id;
+    const { data, error } = await getDb()
+      .from("renewal_seller_profile")
+      .update(row)
+      .eq("id", profile.id)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return rowToSellerProfile(data);
+  } else {
+    const { data, error } = await getDb()
+      .from("renewal_seller_profile")
+      .insert(row)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return rowToSellerProfile(data);
+  }
+}
+
+/* ---- Documents ---- */
+function rowToDocument(row) {
+  return {
+    id: row.id,
+    docType: row.doc_type,
+    docNumber: row.doc_number,
+    docDate: row.doc_date,
+    accountId: row.account_id,
+    accountName: row.account_name || "",
+    accountGstin: row.account_gstin || "",
+    vehicles: row.vehicles || [],
+    subtotal: Number(row.subtotal) || 0,
+    cgst: Number(row.cgst) || 0,
+    sgst: Number(row.sgst) || 0,
+    igst: Number(row.igst) || 0,
+    total: Number(row.total) || 0,
+    hsnCode: row.hsn_code || "",
+    gstRate: Number(row.gst_rate) || 0,
+    paymentMode: row.payment_mode || "",
+    linkedPayments: row.linked_payments || [],
+    notes: row.notes || "",
+    htmlSnapshot: row.html_snapshot || "",
+    createdAt: row.created_at,
+    createdBy: row.created_by,
+  };
+}
+
+async function fetchRenewalDocuments(limit = 500) {
+  const { data, error } = await getDb()
+    .from("renewal_documents")
+    .select("*")
+    .order("doc_date", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(error.message);
+  return (data || []).map(rowToDocument);
+}
+
+async function getNextDocNumber(docType, period) {
+  // Get the highest existing number for this doc_type + period
+  const { data, error } = await getDb()
+    .from("renewal_documents")
+    .select("doc_number")
+    .eq("doc_type", docType)
+    .like("doc_number", `${docType}/${period}/%`)
+    .order("doc_number", { ascending: false })
+    .limit(1);
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) return 1;
+  const last = data[0].doc_number;
+  const parts = last.split("/");
+  const n = parseInt(parts[parts.length - 1], 10);
+  return isNaN(n) ? 1 : n + 1;
+}
+
+async function createRenewalDocument(doc) {
+  const row = {
+    doc_type: doc.docType,
+    doc_number: doc.docNumber,
+    doc_date: doc.docDate,
+    account_id: doc.accountId || null,
+    account_name: doc.accountName || null,
+    account_gstin: doc.accountGstin || null,
+    vehicles: doc.vehicles || [],
+    subtotal: Number(doc.subtotal) || 0,
+    cgst: Number(doc.cgst) || 0,
+    sgst: Number(doc.sgst) || 0,
+    igst: Number(doc.igst) || 0,
+    total: Number(doc.total) || 0,
+    hsn_code: doc.hsnCode || null,
+    gst_rate: Number(doc.gstRate) || null,
+    payment_mode: doc.paymentMode || null,
+    linked_payments: doc.linkedPayments || [],
+    notes: doc.notes || null,
+    html_snapshot: doc.htmlSnapshot || null,
+    created_by: doc.createdBy || null,
+  };
+  const { data, error } = await getDb()
+    .from("renewal_documents")
+    .insert(row)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return rowToDocument(data);
+}
+
+async function deleteRenewalDocument(id) {
+  const { data, error } = await getDb()
+    .from("renewal_documents")
+    .delete()
+    .eq("id", id)
+    .select();
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) {
+    throw new Error("Delete had no effect. Permission denied.");
+  }
+  return true;
+}
+
+/* ---- Update renewal with account link ---- */
+async function updateRenewalAccountLink(renewalId, accountId) {
+  const { data, error } = await getDb()
+    .from("renewals")
+    .update({ account_id: accountId || null })
+    .eq("id", renewalId)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return rowToRenewal(data);
+}
+
+async function bulkUpdateRenewalAccountLinks(renewalIds, accountId) {
+  const { data, error } = await getDb()
+    .from("renewals")
+    .update({ account_id: accountId || null })
+    .in("id", renewalIds)
+    .select();
+  if (error) throw new Error(error.message);
+  return (data || []).map(rowToRenewal);
 }
