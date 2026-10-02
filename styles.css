@@ -10837,67 +10837,405 @@ button.clickable-card:focus-visible {
 }
 
 /* Doc generation modal */
-.doc-gen-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 0.5rem;
-  margin-bottom: 1rem;
+/* ============================================================
+   v3.9.6 — Clean & clear Document Generation modal
+   (replaces v3.9.0 legacy .doc-gen-grid / .doc-items-preview)
+   ============================================================ */
+
+/* --- Wider modal just for doc generation --- */
+.modal.modal-doc-gen {
+  max-width: 640px !important;
+  width: 96vw !important;
+  padding: 1.4rem 1.5rem 1.25rem;
+  max-height: 92vh;
+  overflow-y: auto;
 }
 
-.doc-items-preview {
+/* --- Modal header with icon + title --- */
+.doc-modal-head {
+  margin: -1.4rem -1.5rem 1rem;
+  padding: 1.1rem 1.5rem 0.9rem;
+  background: linear-gradient(135deg, #f0f9ff 0%, #ecfeff 100%);
+  border-bottom: 1px solid #cffafe;
+  border-radius: 12px 12px 0 0;
+}
+
+.doc-modal-title {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.doc-modal-icon {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  font-size: 1.4rem;
+  background: #fff;
+  border: 2px solid #0891b2;
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(8, 145, 178, 0.15);
+}
+
+.modal.modal-doc-pi  .doc-modal-icon { border-color: #d97706; }
+.modal.modal-doc-inv .doc-modal-icon { border-color: #059669; }
+.modal.modal-doc-r   .doc-modal-icon { border-color: #7c3aed; }
+
+.doc-modal-head h3 {
+  margin: 0 0 0.15rem;
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -0.015em;
+}
+
+.doc-modal-sub {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #475569;
+  font-weight: 500;
+}
+
+/* --- Section cards (one per logical group) --- */
+.doc-form-section {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 0.65rem 0.85rem;
-  margin-bottom: 1rem;
+  border-radius: 10px;
+  padding: 0.85rem 1rem 0.95rem;
+  margin-bottom: 0.65rem;
 }
 
-.doc-items-preview h4 {
-  font-size: 0.85rem;
-  margin-bottom: 0.4rem;
+.doc-billto-section {
+  background: linear-gradient(135deg, #ecfeff 0%, #f0fdfa 100%);
+  border-color: #a5f3fc;
+  padding: 0.95rem 1rem;
+}
+
+.doc-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: #475569;
+  margin-bottom: 0.65rem;
 }
 
-.doc-items-list {
-  max-height: 180px;
+.doc-section-title .required {
+  color: #dc2626;
+  font-weight: 700;
+}
+
+.doc-section-icon {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  font-size: 0.95rem;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Pills (GST status, item count, required flag) */
+.doc-pill {
+  margin-left: auto;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.doc-pill-on {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+
+.doc-pill-off {
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #cbd5e1;
+}
+
+.doc-pill-count {
+  background: #0891b2;
+  color: #fff;
+  border: 1px solid #0891b2;
+  letter-spacing: 0.02em;
+}
+
+.doc-pill-req {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
+/* --- Field grid inside sections --- */
+.doc-field-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.doc-form-section .form-row {
+  margin-bottom: 0.55rem;
+}
+
+.doc-form-section .form-row:last-child {
+  margin-bottom: 0;
+}
+
+.doc-form-section .form-row label {
+  display: block;
+  margin-bottom: 0.28rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #334155;
+  letter-spacing: 0.01em;
+}
+
+.doc-form-section .form-row input,
+.doc-form-section .form-row select,
+.doc-form-section .form-row textarea {
+  width: 100%;
+  padding: 0.55rem 0.72rem;
+  font-size: 0.9rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #fff;
+  color: #0f172a;
+  font-family: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.doc-form-section .form-row input:focus,
+.doc-form-section .form-row select:focus,
+.doc-form-section .form-row textarea:focus {
+  outline: none;
+  border-color: #0891b2;
+  box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.15);
+}
+
+.doc-form-section .form-row textarea {
+  resize: vertical;
+  min-height: 48px;
+  line-height: 1.4;
+}
+
+.label-hint {
+  font-weight: 400;
+  color: #94a3b8;
+  font-size: 0.7rem;
+}
+
+/* --- Bill To dropdown (prominent, standalone) --- */
+.doc-billto-select {
+  width: 100%;
+  padding: 0.68rem 0.85rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  border: 1px solid #67e8f9;
+  border-radius: 8px;
+  background: #fff;
+  color: #0f172a;
+  font-family: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.doc-billto-select:focus {
+  outline: none;
+  border-color: #0891b2;
+  box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.2);
+}
+
+/* --- Line Items list --- */
+.doc-items-section .doc-items-list {
+  max-height: 200px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  padding: 0.25rem 0.5rem;
 }
 
 .doc-item-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 3px 0;
+  display: grid;
+  grid-template-columns: 24px auto 1fr auto;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.25rem;
   font-size: 0.78rem;
   border-bottom: 1px dashed #e2e8f0;
 }
 
-.doc-item-row:last-child { border-bottom: none; }
+.doc-item-row:last-child {
+  border-bottom: none;
+}
 
+.doc-item-idx {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  background: #f1f5f9;
+  border-radius: 5px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.doc-plate-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  background: #ecfeff;
+  color: #0e7490;
+  border: 1px solid #a5f3fc;
+  border-radius: 5px;
+  font-weight: 700;
+  font-size: 0.74rem;
+  letter-spacing: 0.03em;
+  font-family: 'Manrope', system-ui, sans-serif;
+  white-space: nowrap;
+}
+
+.doc-item-name {
+  color: #475569;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.doc-item-imei {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  text-align: right;
+  letter-spacing: 0.02em;
+}
+
+/* --- Totals card (prominent, with grand total emphasis) --- */
 .doc-totals-preview {
-  background: #fff;
+  background: linear-gradient(135deg, #fff 0%, #ecfeff 100%);
   border: 2px solid #0891b2;
-  border-radius: 8px;
-  padding: 0.8rem 1rem;
-  margin-bottom: 1rem;
+  border-radius: 10px;
+  padding: 0.9rem 1.1rem;
+  margin-bottom: 0.75rem;
+  box-shadow: 0 2px 8px rgba(8, 145, 178, 0.1);
 }
 
 .totals-row {
   display: flex;
   justify-content: space-between;
-  padding: 3px 0;
+  align-items: baseline;
+  padding: 4px 0;
   font-size: 0.88rem;
+  color: #475569;
+}
+
+.totals-row strong {
+  color: #0f172a;
+  font-weight: 600;
 }
 
 .totals-grand {
-  border-top: 2px solid #0891b2;
-  margin-top: 0.4rem;
-  padding-top: 0.5rem;
-  font-size: 1.05rem;
+  border-top: 2px dashed #0891b2;
+  margin-top: 0.5rem;
+  padding-top: 0.6rem;
+  font-size: 1rem;
+  color: #0e7490;
+  font-weight: 700;
+}
+
+.totals-grand strong {
   color: #0891b2;
+  font-size: 1.25rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+/* --- Action buttons stay sticky-looking at bottom --- */
+.doc-modal-actions {
+  display: flex;
+  gap: 0.6rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+.doc-form-empty {
+  padding: 1rem;
+  text-align: center;
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+/* --- Mobile: single column, tighter --- */
+@media (max-width: 520px) {
+  .modal.modal-doc-gen {
+    padding: 1rem 1rem 0.9rem;
+  }
+  .doc-modal-head {
+    margin: -1rem -1rem 0.85rem;
+    padding: 0.9rem 1rem 0.8rem;
+  }
+  .doc-modal-icon {
+    width: 40px;
+    height: 40px;
+    font-size: 1.2rem;
+  }
+  .doc-modal-head h3 {
+    font-size: 1.05rem;
+  }
+  .doc-form-section {
+    padding: 0.75rem 0.85rem;
+  }
+  .doc-field-grid-2 {
+    grid-template-columns: 1fr;
+    gap: 0.4rem;
+  }
+  .doc-section-title {
+    font-size: 0.7rem;
+    flex-wrap: wrap;
+  }
+  .doc-pill {
+    font-size: 0.62rem;
+  }
+  .doc-item-row {
+    grid-template-columns: 22px auto 1fr;
+    row-gap: 2px;
+  }
+  .doc-item-imei {
+    grid-column: 2 / 4;
+    text-align: left;
+    font-size: 0.68rem;
+  }
+  .totals-row {
+    font-size: 0.82rem;
+  }
+  .totals-grand strong {
+    font-size: 1.1rem;
+  }
+  .doc-modal-actions {
+    flex-direction: column-reverse;
+  }
+  .doc-modal-actions .btn {
+    width: 100%;
+  }
 }
 
 
@@ -10970,10 +11308,20 @@ button.clickable-card:focus-visible {
 }
 
 .theme-swatch {
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.theme-swatch-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
 }
 
 .theme-name {
@@ -11034,4 +11382,23 @@ button.clickable-card:focus-visible {
 
 .doc-badge-r:hover {
   background: #ddd6fe;
+}
+
+/* v3.9.5 — Modal checkbox label */
+.check-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0.4rem 0;
+  color: #334155;
+}
+
+.check-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #0891b2;
+  cursor: pointer;
 }

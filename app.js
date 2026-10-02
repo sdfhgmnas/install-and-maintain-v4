@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.9.3";
+const APP_VERSION = "3.9.7";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -13518,13 +13518,17 @@ function renderDocBadge(doc) {
 }
 
 // Theme presets for documents
+// v3.9.7 — All LIGHT pastel themes.
+// primary = soft pastel used for backgrounds / banners (readable with dark fg text)
+// accent  = dark readable tone used for text, borders, dividers
+// fg      = dark text color used on top of light primary backgrounds
 const DOC_THEMES = {
-  classic:  { label: "Classic", primary: "#000000", accent: "#333333", fg: "#ffffff" },
-  teal:     { label: "Teal",    primary: "#0e7490", accent: "#083344", fg: "#ffffff" },
-  blue:     { label: "Blue",    primary: "#1e40af", accent: "#1e3a8a", fg: "#ffffff" },
-  burgundy: { label: "Burgundy",primary: "#991b1b", accent: "#7f1d1d", fg: "#ffffff" },
-  green:    { label: "Green",   primary: "#166534", accent: "#14532d", fg: "#ffffff" },
-  purple:   { label: "Purple",  primary: "#6b21a8", accent: "#581c87", fg: "#ffffff" },
+  classic:  { label: "Classic",  primary: "#f1f5f9", accent: "#334155", fg: "#0f172a" }, // slate
+  teal:     { label: "Teal",     primary: "#cffafe", accent: "#0e7490", fg: "#0f172a" }, // cyan
+  blue:     { label: "Blue",     primary: "#dbeafe", accent: "#1d4ed8", fg: "#0f172a" }, // blue
+  burgundy: { label: "Burgundy", primary: "#fee2e2", accent: "#9f1239", fg: "#0f172a" }, // rose
+  green:    { label: "Green",    primary: "#d1fae5", accent: "#166534", fg: "#0f172a" }, // emerald
+  purple:   { label: "Purple",   primary: "#ede9fe", accent: "#6d28d9", fg: "#0f172a" }, // violet
 };
 
 function renderRenewalSubNav(activeKey, isAdmin) {
@@ -13994,7 +13998,9 @@ function renderRenewalSettingsSubPage() {
                 return `
                   <label class="theme-option ${(p.themeColor || 'classic') === t ? 'selected' : ''}">
                     <input type="radio" name="sp_theme" value="${t}" ${(p.themeColor || 'classic') === t ? 'checked' : ''} />
-                    <span class="theme-swatch" style="background: ${meta.primary};"></span>
+                    <span class="theme-swatch" style="background: ${meta.primary}; border-color: ${meta.accent};">
+                      <span class="theme-swatch-dot" style="background: ${meta.accent};"></span>
+                    </span>
                     <span class="theme-name">${meta.label}</span>
                   </label>
                 `;
@@ -14281,78 +14287,138 @@ function openDocGenerationModal(docType) {
   const renderDocForm = (accountId) => {
     const account = renewalAccounts.find((a) => a.id === accountId);
     if (!account) {
-      return `<div class="info-banner" style="color:#991b1b; background:#fef2f2; border-color:#fecaca;">Select an account above to continue.</div>`;
+      return `<div class="doc-form-empty">Select a customer account above to continue.</div>`;
     }
     const defaultRate = account.defaultRatePerYear || 500;
     const defaultShipTo = [account.address, account.city, account.state, account.pincode].filter(Boolean).join(", ");
+    const applyGst = (docType === "INV") || (docType === "PI" && account.isGstRegistered);
+    const gstPill = applyGst
+      ? `<span class="doc-pill doc-pill-on">GST will apply</span>`
+      : `<span class="doc-pill doc-pill-off">No GST</span>`;
+
     return `
-      <div class="doc-gen-grid">
-        <div class="form-row">
-          <label>Doc Date</label>
-          <input type="date" id="doc_date" value="${formatYMD(new Date())}" />
+      <div class="doc-form-section">
+        <div class="doc-section-title">
+          <span class="doc-section-icon">📋</span>
+          <span>Document Info</span>
         </div>
-        <div class="form-row">
-          <label>Rate per SIM/Year (₹)</label>
-          <input type="number" id="doc_rate" value="${defaultRate}" min="0" />
-        </div>
-        <div class="form-row">
-          <label>GST Rate (%)</label>
-          <input type="number" id="doc_gstRate" value="${account.gstRate || 18}" min="0" max="28" step="0.01" />
-        </div>
-        <div class="form-row">
-          <label>HSN/SAC</label>
-          <input type="text" id="doc_hsn" value="${escapeHtml(account.hsnCode || '998412')}" />
+        <div class="doc-field-grid-2">
+          <div class="form-row">
+            <label>Document Date</label>
+            <input type="date" id="doc_date" value="${formatYMD(new Date())}" />
+          </div>
+          <div class="form-row">
+            <label>HSN / SAC Code</label>
+            <input type="text" id="doc_hsn" value="${escapeHtml(account.hsnCode || '998412')}" />
+          </div>
         </div>
       </div>
 
-      <div class="form-row">
-        <label>Ship To Address (leave empty = same as Bill To)</label>
-        <textarea id="doc_shipTo" rows="2" placeholder="${escapeHtml(defaultShipTo)}"></textarea>
+      <div class="doc-form-section">
+        <div class="doc-section-title">
+          <span class="doc-section-icon">💰</span>
+          <span>Pricing &amp; Tax</span>
+          ${gstPill}
+        </div>
+        <div class="doc-field-grid-2">
+          <div class="form-row">
+            <label>Rate per SIM / Year (₹)</label>
+            <input type="number" id="doc_rate" value="${defaultRate}" min="0" />
+          </div>
+          <div class="form-row">
+            <label>GST Rate (%)</label>
+            <input type="number" id="doc_gstRate" value="${account.gstRate || 18}" min="0" max="28" step="0.01" />
+          </div>
+        </div>
       </div>
 
-      <div class="doc-items-preview">
-        <h4>Line Items (${selectedRenewals.length})</h4>
+      <div class="doc-form-section">
+        <div class="doc-section-title">
+          <span class="doc-section-icon">📍</span>
+          <span>Delivery &amp; Options</span>
+        </div>
+        <div class="form-row">
+          <label>Ship To Address <span class="label-hint">(blank = same as Bill To)</span></label>
+          <textarea id="doc_shipTo" rows="2" placeholder="${escapeHtml(defaultShipTo)}"></textarea>
+        </div>
+        <label class="check-label">
+          <input type="checkbox" id="doc_showPeriod" checked />
+          <span>Include <strong>Period</strong> column (subscription start / end dates)</span>
+        </label>
+      </div>
+
+      <div class="doc-form-section doc-items-section">
+        <div class="doc-section-title">
+          <span class="doc-section-icon">📦</span>
+          <span>Line Items</span>
+          <span class="doc-pill doc-pill-count">${selectedRenewals.length}</span>
+        </div>
         <div class="doc-items-list">
-          ${selectedRenewals.map((r, i) => {
-            const status = computeRenewalStatus(r);
-            return `
-              <div class="doc-item-row">
-                <span>${i + 1}. ${escapeHtml(r.plateNumber)} · ${escapeHtml(r.vehicleName || '')}</span>
-                <span class="mono">${escapeHtml(r.imei)}</span>
-              </div>
-            `;
-          }).join("")}
+          ${selectedRenewals.map((r, i) => `
+            <div class="doc-item-row">
+              <span class="doc-item-idx">${i + 1}</span>
+              <span class="doc-plate-chip">${escapeHtml(r.plateNumber)}</span>
+              <span class="doc-item-name">${escapeHtml(r.vehicleName || '—')}</span>
+              <span class="doc-item-imei mono">${escapeHtml(r.imei)}</span>
+            </div>
+          `).join("")}
         </div>
       </div>
 
       <div id="docTotalsPreview" class="doc-totals-preview"></div>
 
       ${docType === "R" ? `
-        <div class="form-row">
-          <label>Payment Mode <span class="required">*</span></label>
-          <select id="doc_payMode" required>
-            <option value="cash">💵 Cash</option>
-            <option value="upi">📱 UPI</option>
-            <option value="bank">🏦 Bank Transfer</option>
-            <option value="cheque">📄 Cheque</option>
-          </select>
+        <div class="doc-form-section">
+          <div class="doc-section-title">
+            <span class="doc-section-icon">💵</span>
+            <span>Payment Received</span>
+            <span class="doc-pill doc-pill-req">Required</span>
+          </div>
+          <div class="form-row">
+            <select id="doc_payMode" required>
+              <option value="cash">💵 Cash</option>
+              <option value="upi">📱 UPI</option>
+              <option value="bank">🏦 Bank Transfer</option>
+              <option value="cheque">📄 Cheque</option>
+            </select>
+          </div>
         </div>
       ` : ""}
 
-      <div class="form-row">
-        <label>Notes</label>
-        <textarea id="doc_notes" rows="2" placeholder="Any additional notes..."></textarea>
+      <div class="doc-form-section">
+        <div class="doc-section-title">
+          <span class="doc-section-icon">📝</span>
+          <span>Notes <span class="label-hint">(optional)</span></span>
+        </div>
+        <div class="form-row">
+          <textarea id="doc_notes" rows="2" placeholder="Any additional notes to show on the document…"></textarea>
+        </div>
       </div>
     `;
   };
 
-  modal.innerHTML = `
-    <h3>Create ${docLabel}</h3>
-    <p class="modal-desc">${selectedRenewals.length} vehicle${selectedRenewals.length !== 1 ? 's' : ''} selected. Pick the customer account to bill.</p>
+  const docIcon = { PI: "📝", INV: "🧾", R: "💳" }[docType];
+  const docAccent = { PI: "pi", INV: "inv", R: "r" }[docType];
 
-    <div class="form-row" style="margin-bottom: 1rem;">
-      <label>Bill To (Customer Account) <span class="required">*</span></label>
-      <select id="doc_billTo" style="font-size: 0.95rem; padding: 0.55rem 0.7rem;">
+  modal.classList.add("modal-doc-gen");
+  modal.classList.add(`modal-doc-${docAccent}`);
+  modal.innerHTML = `
+    <div class="doc-modal-head">
+      <div class="doc-modal-title">
+        <span class="doc-modal-icon">${docIcon}</span>
+        <div>
+          <h3>Create ${docLabel}</h3>
+          <p class="doc-modal-sub">${selectedRenewals.length} vehicle${selectedRenewals.length !== 1 ? 's' : ''} selected · Review &amp; generate the PDF.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="doc-form-section doc-billto-section">
+      <div class="doc-section-title">
+        <span class="doc-section-icon">🏢</span>
+        <span>Bill To (Customer Account) <span class="required">*</span></span>
+      </div>
+      <select id="doc_billTo" class="doc-billto-select">
         <option value="">— Select customer account —</option>
         ${filteredAccounts.map((a) => `
           <option value="${escapeHtml(a.id)}" ${a.id === likelyAccountId ? 'selected' : ''}>
@@ -14364,14 +14430,18 @@ function openDocGenerationModal(docType) {
 
     <div id="docFormBody">${renderDocForm(likelyAccountId)}</div>
 
-    <div class="modal-actions">
+    <div class="modal-actions doc-modal-actions">
       <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
       <button type="button" class="btn btn-primary modal-confirm">📄 Generate ${docLabel}</button>
     </div>
   `;
   modalOverlay.classList.remove("hidden");
-  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
-  modalOverlay.onclick = (e) => { if (e.target === modalOverlay) closeModal(); };
+  const cleanupModalClass = () => {
+    modal.classList.remove("modal-doc-gen");
+    modal.classList.remove(`modal-doc-${docAccent}`);
+  };
+  modal.querySelector('[data-act="cancel"]').onclick = () => { cleanupModalClass(); closeModal(); };
+  modalOverlay.onclick = (e) => { if (e.target === modalOverlay) { cleanupModalClass(); closeModal(); } };
 
   // Dynamic Bill To change — re-render form with new account defaults
   const billToSelect = document.getElementById("doc_billTo");
@@ -14387,7 +14457,9 @@ function openDocGenerationModal(docType) {
     const gstRate = parseFloat(gstEl.value) || 0;
     const subtotal = rate * selectedRenewals.length;
     let cgst = 0, sgst = 0, igst = 0;
-    if (docType === "INV") {
+    // Apply GST for Tax Invoice always, and for PI if customer is GST-registered
+    const applyGst = (docType === "INV") || (docType === "PI" && account.isGstRegistered);
+    if (applyGst) {
       const sameState = (sellerProfile.stateCode || "").trim() === (account.stateCode || "").trim();
       if (sameState) {
         cgst = subtotal * (gstRate / 2) / 100;
@@ -14401,7 +14473,7 @@ function openDocGenerationModal(docType) {
     if (totalsEl) {
       totalsEl.innerHTML = `
         <div class="totals-row"><span>Subtotal:</span><strong>₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
-        ${docType === "INV" ? (igst > 0 ? `
+        ${applyGst ? (igst > 0 ? `
           <div class="totals-row"><span>IGST (${gstRate}%):</span><strong>₹${igst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
         ` : `
           <div class="totals-row"><span>CGST (${gstRate/2}%):</span><strong>₹${cgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></div>
@@ -14437,6 +14509,7 @@ function openDocGenerationModal(docType) {
     const hsn = document.getElementById("doc_hsn").value.trim();
     const notes = document.getElementById("doc_notes").value.trim();
     const shipToOverride = document.getElementById("doc_shipTo").value.trim();
+    const showPeriod = document.getElementById("doc_showPeriod")?.checked !== false;
     const paymentMode = document.getElementById("doc_payMode")?.value || null;
 
     await runWithBusyButton(confirmBtn, async () => {
@@ -14490,6 +14563,7 @@ function openDocGenerationModal(docType) {
           paymentMode,
           notes,
           shipToAddress: shipToOverride,
+          showPeriod,
         });
 
         // Save to DB
@@ -14518,6 +14592,7 @@ function openDocGenerationModal(docType) {
         const saved = await createRenewalDocument(docRecord);
         renewalDocuments.unshift(saved);
 
+        cleanupModalClass();
         closeModal();
         selectedVehicleIds.clear();
         showToast(`✓ ${docLabel} ${docNumber} created`);
@@ -14545,13 +14620,14 @@ function buildDocumentHTML(docType, d) {
   const billToAddr = [acct.address, acct.city, acct.state, acct.pincode].filter(Boolean).join(", ");
   const shipTo = (d.shipToAddress && d.shipToAddress.trim()) ? d.shipToAddress.trim() : null;
 
+  const showPeriod = d.showPeriod !== false; // default true for legacy docs
   const itemsHtml = d.lineItems.map((li, i) => `
     <tr>
       <td>${i + 1}</td>
       <td>${escapeHtml(li.plateNumber)}<br><span class="small">${escapeHtml(li.vehicleName || "")}</span></td>
       <td class="mono small">${escapeHtml(li.imei)}</td>
       <td class="mono small">${escapeHtml(d.hsnCode || "")}</td>
-      <td class="small">${formatDateIndian(li.periodStart)} → ${formatDateIndian(li.periodEnd)}</td>
+      ${showPeriod ? `<td class="small">${formatDateIndian(li.periodStart)} → ${formatDateIndian(li.periodEnd)}</td>` : ""}
       <td class="right">₹${Number(li.rate).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
     </tr>
   `).join("");
@@ -14563,59 +14639,84 @@ function buildDocumentHTML(docType, d) {
 <title>${typeTitle} — ${d.docNumber}</title>
 <style>
   @page { size: A4; margin: 12mm; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, Helvetica, sans-serif; color: #000; font-size: 11px; line-height: 1.4; }
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+  body {
+    font-family: Arial, Helvetica, sans-serif;
+    color: #000;
+    font-size: 11px;
+    line-height: 1.4;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
   .doc-wrap { max-width: 100%; }
-  .doc-title { text-align: center; font-size: 14px; font-weight: 700; letter-spacing: 2px; padding: 8px; background: ${theme.primary}; color: ${theme.fg}; margin-bottom: 10px; }
-  .header-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
-  .header-tbl td { padding: 8px 10px; vertical-align: top; border: 1px solid #000; }
-  .seller-name { font-size: 15px; font-weight: 700; color: ${theme.primary}; }
+  .doc-title { text-align: center; font-size: 16px; font-weight: 700; letter-spacing: 3px; padding: 12px; background: ${theme.primary}; color: ${theme.fg}; margin-bottom: 10px; border-radius: 2px; border: 1.5px solid ${theme.accent}; }
+  .header-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; border: 2px solid ${theme.accent}; }
+  .header-tbl td { padding: 10px 12px; vertical-align: top; }
+  .header-tbl td:first-child { border-right: 2px solid ${theme.accent}; }
+  .seller-name { font-size: 17px; font-weight: 800; color: ${theme.accent}; letter-spacing: 0.5px; margin-bottom: 4px; }
   .doc-meta { text-align: right; }
   .doc-meta div { margin-bottom: 2px; }
-  .doc-meta strong { font-size: 12px; }
-  .logo-img { max-height: 50px; max-width: 150px; margin-bottom: 4px; }
+  .doc-meta strong { font-size: 12px; color: ${theme.accent}; }
+  .logo-img { max-height: 55px; max-width: 160px; margin-bottom: 6px; }
 
   .parties { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
-  .parties td { width: 50%; padding: 8px 10px; border: 1px solid #000; vertical-align: top; }
-  .party-label { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; font-weight: 700; }
-  .party-name { font-weight: 700; font-size: 12px; margin-bottom: 2px; }
+  .parties td { width: 50%; padding: 10px 12px; vertical-align: top; border: 1px solid ${theme.accent}; }
+  .parties td:first-child { background: #f9fafb; }
+  .party-label { font-size: 10px; color: ${theme.fg}; background: ${theme.primary}; display: inline-block; padding: 3px 10px; border-radius: 3px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; font-weight: 700; border: 1px solid ${theme.accent}; }
+  .party-name { font-weight: 800; font-size: 12.5px; color: ${theme.accent}; margin-bottom: 3px; }
 
-  .items-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
-  .items-tbl th, .items-tbl td { padding: 5px 6px; border: 1px solid #000; text-align: left; font-size: 10px; }
-  .items-tbl th { background: ${theme.primary}; color: ${theme.fg}; font-weight: 700; text-transform: uppercase; font-size: 9px; }
+  .items-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; border: 1px solid ${theme.accent}; }
+  .items-tbl th, .items-tbl td { padding: 7px 8px; border: 1px solid ${theme.accent}; text-align: left; font-size: 10px; }
+  .items-tbl th { background: ${theme.primary}; color: ${theme.fg}; font-weight: 700; text-transform: uppercase; font-size: 9px; letter-spacing: 0.5px; }
+  .items-tbl tr:nth-child(even) td { background: #f9fafb; }
   .items-tbl .right { text-align: right; }
-  .items-tbl .small { font-size: 9px; color: #333; }
+  .items-tbl .small { font-size: 9px; color: #475569; }
   .mono { font-family: 'Courier New', monospace; }
 
-  .totals-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
-  .totals-tbl td { padding: 5px 10px; border: 1px solid #000; font-size: 11px; }
-  .totals-tbl .label { text-align: right; width: 70%; font-weight: 600; }
-  .totals-tbl .value { text-align: right; width: 30%; }
-  .totals-tbl .grand-total { background: ${theme.primary}; color: ${theme.fg}; font-weight: 700; font-size: 13px; }
+  .totals-tbl { width: 100%; border-collapse: collapse; margin-bottom: 10px; border: 1px solid ${theme.accent}; }
+  .totals-tbl td { padding: 7px 12px; border: 1px solid ${theme.accent}; font-size: 11px; }
+  .totals-tbl .label { text-align: right; width: 70%; font-weight: 600; background: #f9fafb; }
+  .totals-tbl .value { text-align: right; width: 30%; font-weight: 700; }
+  .totals-tbl .grand-total td { background: ${theme.primary}; color: ${theme.fg}; font-weight: 800; font-size: 14px; letter-spacing: 0.5px; border-top: 2px solid ${theme.accent}; border-bottom: 2px solid ${theme.accent}; }
 
-  .words-row { padding: 6px 10px; border: 1px solid #000; font-size: 10px; margin-bottom: 10px; background: #f5f5f5; }
-  .words-row strong { font-style: italic; }
+  .words-row { padding: 8px 12px; border: 1px solid ${theme.accent}; font-size: 10.5px; margin-bottom: 10px; background: #fef9c3; border-left: 4px solid ${theme.accent}; }
+  .words-row strong { font-style: italic; color: ${theme.accent}; }
 
-  .bank-sig { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
-  .bank-sig td { border: 1px solid #000; padding: 8px 10px; vertical-align: top; width: 50%; }
-  .bank-sig .mini-label { font-size: 9px; color: #555; margin-bottom: 2px; font-weight: 700; }
+  .bank-sig { width: 100%; border-collapse: collapse; margin-bottom: 10px; border: 1px solid ${theme.accent}; }
+  .bank-sig td { border: 1px solid ${theme.accent}; padding: 10px 12px; vertical-align: top; width: 50%; }
+  .bank-sig td:first-child { background: #f0f9ff; }
+  .bank-sig .mini-label { font-size: 10px; color: ${theme.fg}; background: ${theme.primary}; display: inline-block; padding: 2px 8px; border-radius: 3px; margin-bottom: 6px; font-weight: 700; letter-spacing: 0.5px; border: 1px solid ${theme.accent}; }
 
-  .terms { padding: 8px 10px; border: 1px solid #000; font-size: 9px; margin-bottom: 10px; }
-  .terms h4 { font-size: 10px; margin-bottom: 4px; }
+  .terms { padding: 10px 12px; border: 1px solid ${theme.accent}; font-size: 9px; margin-bottom: 10px; border-left: 4px solid ${theme.accent}; background: #f8fafc; }
+  .terms h4 { font-size: 10px; margin-bottom: 4px; color: ${theme.accent}; }
 
   .sig-area { text-align: right; padding-top: 20px; }
-  .electronic-note { font-size: 10px; font-style: italic; color: #333; text-align: center; padding: 8px; border: 1px dashed #666; margin: 10px 0; background: #fafafa; }
+  .electronic-note { font-size: 10.5px; font-style: italic; color: ${theme.accent}; text-align: center; padding: 10px; border: 1.5px dashed ${theme.accent}; margin: 10px 0; background: ${theme.primary}; border-radius: 4px; font-weight: 600; }
 
-  .no-print { padding: 10px; background: ${theme.primary}; color: ${theme.fg}; text-align: center; }
-  .no-print button { background: white; color: ${theme.primary}; border: none; padding: 6px 14px; border-radius: 4px; font-weight: 700; cursor: pointer; margin: 0 4px; }
-  @media print { .no-print { display: none; } }
+  .no-print { padding: 12px 14px; background: ${theme.primary}; color: ${theme.fg}; border-bottom: 2px solid ${theme.accent}; }
+  .no-print-title { font-weight: 800; margin-bottom: 6px; font-size: 13px; color: ${theme.accent}; }
+  .no-print button { background: white; color: ${theme.accent}; border: 1.5px solid ${theme.accent}; padding: 7px 14px; border-radius: 4px; font-weight: 700; cursor: pointer; margin: 4px 4px 0 0; font-size: 12px; }
+  .no-print-hint { font-size: 11px; background: rgba(255,255,255,0.6); padding: 8px 10px; border-radius: 4px; margin-top: 6px; line-height: 1.5; color: #0f172a; }
+  .no-print-hint strong { font-weight: 700; }
+  @media print { .no-print { display: none !important; } }
 </style>
 </head>
 <body>
 <div class="no-print">
-  <strong>${typeTitle} · ${d.docNumber}</strong> &nbsp;
+  <div class="no-print-title">${typeTitle} · ${d.docNumber}</div>
   <button onclick="window.print()">🖨 Print / Save as PDF</button>
   <button onclick="window.close()">✕ Close</button>
+  <div class="no-print-hint">
+    <strong>📌 For clean PDF (no date/URL at top):</strong>
+    Chrome print dialog → <strong>"More settings"</strong> → <strong>uncheck "Headers and footers"</strong> + <strong>check "Background graphics"</strong>
+  </div>
 </div>
 
 <div class="doc-wrap">
@@ -14658,8 +14759,7 @@ function buildDocumentHTML(docType, d) {
           ${acct.address ? `<div>${escapeHtml(acct.address)}</div>` : ""}
           <div>${escapeHtml([acct.city, acct.state, acct.pincode].filter(Boolean).join(", "))}</div>
         `}
-        ${docType !== "R" ? `<div style="margin-top: 4px;"><strong>Place of Supply:</strong> ${escapeHtml(acct.state || "—")}${acct.stateCode ? ` (${escapeHtml(acct.stateCode)})` : ""}</div>` : ""}
-        ${docType !== "R" ? `<div><strong>Tax Type:</strong> ${sameState ? "CGST + SGST (intra-state)" : "IGST (inter-state)"}</div>` : ""}
+        ${acct.gstin ? `<div style="margin-top: 4px;"><strong>GSTIN:</strong> ${escapeHtml(acct.gstin)}</div>` : ""}
       </td>
     </tr>
   </table>
@@ -14671,7 +14771,7 @@ function buildDocumentHTML(docType, d) {
         <th>Vehicle</th>
         <th>IMEI</th>
         <th>HSN/SAC</th>
-        <th>Period</th>
+        ${showPeriod ? '<th>Period</th>' : ''}
         <th class="right">Amount</th>
       </tr>
     </thead>
