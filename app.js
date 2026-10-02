@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.9.1";
+const APP_VERSION = "3.9.2";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -12738,9 +12738,9 @@ function renderRenewalsPage() {
                 <th class="checkbox-col"><input type="checkbox" id="selectAllRenewals" ${filtered.length > 0 && filtered.every(d => selectedVehicleIds.has(d.renewal.id)) ? 'checked' : ''} title="Select all filtered"></th>
                 <th>Status</th>
                 <th>Plate / Vehicle</th>
-                <th>Company / Account</th>
+                <th>Company</th>
                 <th>IMEI</th>
-                <th>SIM</th>
+                <th>SIM / Doc</th>
                 <th>Created</th>
                 <th>Expiry</th>
                 <th>Year</th>
@@ -12754,7 +12754,7 @@ function renderRenewalsPage() {
                 const meta = renewalStatusMeta(status.status);
                 const isOverdue = status.status === "overdue";
                 const isSelected = selectedVehicleIds.has(r.id);
-                const linkedAccount = r.accountId ? renewalAccounts.find(a => a.id === r.accountId) : null;
+                const latestDoc = latestDocForVehicle(r.id);
                 const daysText = status.daysUntilExpiry === null ? "—"
                   : isOverdue ? `overdue by ${status.daysOverdue} days`
                   : status.daysUntilExpiry < 0 ? `${Math.abs(status.daysUntilExpiry)} days ago`
@@ -12770,14 +12770,14 @@ function renderRenewalsPage() {
                       <span style="font-size:0.78rem; color:#64748b;">${escapeHtml(r.vehicleName || "")}</span>
                     </td>
                     <td>
-                      ${linkedAccount ? `<strong style="color:#0891b2;">${escapeHtml(linkedAccount.name)}</strong>` : escapeHtml(r.company || "—")}
+                      ${escapeHtml(r.company || "—")}
                       ${r.branch ? `<br><span style="font-size:0.75rem; color:#94a3b8;">${escapeHtml(r.branch)}</span>` : ""}
-                      ${linkedAccount?.isGstRegistered ? `<br><span class="gst-badge">GST</span>` : linkedAccount ? `<br><span class="nongst-badge">Non-GST</span>` : ""}
                     </td>
                     <td class="mono">${escapeHtml(r.imei)}</td>
                     <td class="mono">
                       ${escapeHtml(r.simNumber || "—")}
                       ${r.simProvider ? `<br><span style="font-size:0.72rem; color:#64748b;">${escapeHtml(r.simProvider)}</span>` : ""}
+                      ${latestDoc ? renderDocBadge(latestDoc) : ""}
                     </td>
                     <td class="date-cell">${formatDateIndian(r.createdDate)}</td>
                     <td class="date-cell">
@@ -12829,6 +12829,7 @@ function renderRenewalsPage() {
                   <div style="font-size:0.78rem; color:#64748b;">${escapeHtml(r.company || "—")}${r.branch ? ` · ${escapeHtml(r.branch)}` : ""}</div>
                   <div class="mono" style="font-size:0.75rem;">IMEI: ${escapeHtml(r.imei)}</div>
                   <div class="mono" style="font-size:0.75rem;">SIM: ${escapeHtml(r.simNumber || "—")} ${r.simProvider ? `(${escapeHtml(r.simProvider)})` : ""}</div>
+                  ${(() => { const d = latestDocForVehicle(r.id); return d ? renderDocBadge(d) : ''; })()}
                   <div style="font-size:0.78rem; margin-top:0.3rem;">
                     Expiry: <strong>${formatDateIndian(status.nextExpiryDate)}</strong>
                     <span style="font-weight:${isOverdue ? '700' : '400'}; color:${(isOverdue || status.daysUntilExpiry < 0) ? '#dc2626' : '#64748b'};">(${daysText})</span>
@@ -12893,7 +12894,17 @@ function renderRenewalsPage() {
   document.getElementById("bulkCreatePIBtn")?.addEventListener("click", () => openDocGenerationModal("PI"));
   document.getElementById("bulkCreateInvoiceBtn")?.addEventListener("click", () => openDocGenerationModal("INV"));
   document.getElementById("bulkCreateReceiptBtn")?.addEventListener("click", () => openDocGenerationModal("R"));
-  document.getElementById("bulkAssignAccountBtn")?.addEventListener("click", () => openBulkAccountAssignModal());
+
+  // Click doc badges in SIM column to re-open doc
+  app.querySelectorAll(".reopen-doc-badge").forEach((badge) => {
+    badge.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const docId = badge.dataset.docId;
+      const doc = renewalDocuments.find((d) => d.id === docId);
+      if (doc?.htmlSnapshot) openDocumentPrintWindow(doc.htmlSnapshot, doc.docNumber);
+      else showToast("Document HTML not saved.", true);
+    });
+  });
 
   // Wire handlers
   document.getElementById("renewalsSearch")?.addEventListener("input", (e) => {
@@ -13477,6 +13488,35 @@ function exportRenewalsToExcel(list) {
    v3.9.0+ — SUB-NAV, ACCOUNTS, SETTINGS, DOCUMENTS
    ============================================================ */
 
+/**
+ * Find the latest document that includes this vehicle.
+ * Returns null if no doc exists for this renewal.
+ */
+function latestDocForVehicle(renewalId) {
+  if (!renewalDocuments || renewalDocuments.length === 0) return null;
+  for (const d of renewalDocuments) {
+    const vehicles = d.vehicles || [];
+    if (vehicles.some((v) => v.renewalId === renewalId)) {
+      return d;  // renewalDocuments is already sorted desc by date
+    }
+  }
+  return null;
+}
+
+/**
+ * Render a small badge indicating a doc exists for this vehicle.
+ * Clickable to re-open the doc print view.
+ */
+function renderDocBadge(doc) {
+  const typeLabel = { PI: "PI", INV: "INV", R: "RCT" }[doc.docType] || doc.docType;
+  const cls = `doc-badge-${doc.docType.toLowerCase()}`;
+  return `
+    <div class="doc-badge ${cls} reopen-doc-badge" data-doc-id="${escapeHtml(doc.id)}" title="Click to reopen ${escapeHtml(doc.docNumber)}">
+      📄 ${typeLabel} ${escapeHtml(doc.docNumber)}
+    </div>
+  `;
+}
+
 // Theme presets for documents
 const DOC_THEMES = {
   classic:  { label: "Classic", primary: "#000000", accent: "#333333", fg: "#ffffff" },
@@ -13532,11 +13572,8 @@ function renderBulkActionBar(decorated) {
     <div class="bulk-action-bar">
       <div class="bulk-left">
         <strong>${count}</strong> selected
-        ${multipleAccounts ? '<span class="bulk-warn">⚠️ Multiple accounts — can only group same-account for one doc</span>' : ''}
-        ${hasUnassigned ? '<span class="bulk-warn">⚠️ Some vehicles have no account</span>' : ''}
       </div>
       <div class="bulk-actions">
-        <button type="button" class="btn btn-outline btn-sm" id="bulkAssignAccountBtn">🔗 Assign Account</button>
         <button type="button" class="btn btn-primary btn-sm" id="bulkCreatePIBtn">📝 Create PI</button>
         <button type="button" class="btn btn-primary btn-sm" id="bulkCreateInvoiceBtn">🧾 Tax Invoice</button>
         <button type="button" class="btn btn-primary btn-sm" id="bulkCreateReceiptBtn">🧾 Receipt</button>
@@ -14223,16 +14260,6 @@ function openDocGenerationModal(docType) {
 
   const selectedRenewals = renewals.filter((r) => selectedVehicleIds.has(r.id));
 
-  // Try to detect a likely account from selected vehicles (pre-selection hint, not enforced)
-  const likelyAccountId = (() => {
-    const counts = {};
-    selectedRenewals.forEach((r) => {
-      if (r.accountId) counts[r.accountId] = (counts[r.accountId] || 0) + 1;
-    });
-    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-    return sorted.length > 0 ? sorted[0][0] : null;
-  })();
-
   // Filter accounts by GST compatibility for selected doc type
   const filteredAccounts = renewalAccounts.filter((a) => {
     if (docType === "INV") return a.isGstRegistered;
@@ -14245,6 +14272,9 @@ function openDocGenerationModal(docType) {
     showToast(`⚠️ No ${needText} accounts found. Add one in Accounts tab.`, true);
     return;
   }
+
+  // Auto-select FIRST account so form shows immediately (user can change dropdown)
+  const likelyAccountId = filteredAccounts[0].id;
 
   const docLabel = { PI: "Proforma Invoice", INV: "Tax Invoice", R: "Receipt" }[docType];
 

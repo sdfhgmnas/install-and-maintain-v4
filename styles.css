@@ -10981,3 +10981,57 @@ button.clickable-card:focus-visible {
   font-weight: 600;
   color: #0f172a;
 }
+
+/* ============================================================
+   v3.9.2 — Document badge in SIM column
+   ============================================================ */
+
+.doc-badge {
+  display: inline-block;
+  margin-top: 5px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: transform 0.1s, box-shadow 0.15s;
+  font-family: 'Manrope', system-ui, sans-serif;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.doc-badge:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.doc-badge-pi {
+  background: #fef3c7;
+  color: #78350f;
+  border-color: #fde68a;
+}
+
+.doc-badge-pi:hover {
+  background: #fde68a;
+}
+
+.doc-badge-inv {
+  background: #d1fae5;
+  color: #065f46;
+  border-color: #a7f3d0;
+}
+
+.doc-badge-inv:hover {
+  background: #a7f3d0;
+}
+
+.doc-badge-r {
+  background: #e9d5ff;
+  color: #5b21b6;
+  border-color: #ddd6fe;
+}
+
+.doc-badge-r:hover {
+  background: #ddd6fe;
+}
