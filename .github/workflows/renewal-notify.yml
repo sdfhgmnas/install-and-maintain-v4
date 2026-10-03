@@ -1,0 +1,55 @@
+name: Renewal Email Alerts
+
+# Sends a daily digest email listing vehicles in Soon / Urgent / Overdue status.
+# Skips the email when nothing needs attention — zero spam.
+#
+# ─────────────────────────────────────────────────────────────────
+# SETUP (one-time):
+#   You already have these:
+#     • SUPABASE_URL
+#     • SUPABASE_ANON_KEY
+#
+#   Add these 2 NEW secrets (Settings → Secrets and variables → Actions):
+#     • RESEND_API_KEY   — from https://resend.com (free: 100 emails/day)
+#     • NOTIFY_EMAIL     — recipient email(s). Comma-separate for multiple:
+#                          "abhinav@example.com,manager@example.com"
+# ─────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    - cron: '30 3 * * *'   # 09:00 IST daily — morning digest
+  workflow_dispatch:         # Manual trigger button
+
+jobs:
+  notify:
+    name: Send renewal digest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify secrets
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+        run: |
+          [ -n "$SUPABASE_URL" ]      || { echo "::error::SUPABASE_URL missing";      exit 1; }
+          [ -n "$SUPABASE_ANON_KEY" ] || { echo "::error::SUPABASE_ANON_KEY missing"; exit 1; }
+          [ -n "$RESEND_API_KEY" ]    || { echo "::error::RESEND_API_KEY missing — add it in repo Settings → Secrets → Actions";    exit 1; }
+          [ -n "$NOTIFY_EMAIL" ]      || { echo "::error::NOTIFY_EMAIL missing (recipient email)"; exit 1; }
+          echo "✓ All 4 secrets are set"
+
+      - name: Compute status & send digest email
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          APP_URL: 'https://sdfhgmnas.github.io/install-and-maintain-v4/'
+        run: node .github/scripts/renewal-notify.mjs
