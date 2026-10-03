@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.9.11";
+const APP_VERSION = "3.9.13";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -12435,10 +12435,19 @@ function computeRenewalStatus(renewal, today = new Date()) {
   (renewal.payments || []).forEach((p) => { if (p.year) paymentsByYear[p.year] = p; });
   const paidYears = Object.keys(paymentsByYear).map((y) => parseInt(y, 10)).sort((a, b) => a - b);
 
+  // v3.9.13 — Y1 free-trial-days: if set (e.g. 8 days free at install),
+  // the Y1 billing cycle starts N days after the actual created date.
+  // Y2 and beyond chain forward from the shifted Y1 end, so the trial
+  // propagates naturally — no special-casing needed later.
+  const freeTrialDays = Number(renewal.freeTrialDays) || 0;
+  const effectiveStart = freeTrialDays > 0
+    ? addDaysLocal(created, freeTrialDays)
+    : new Date(created);
+
   // Walk through years, computing cycle boundaries respecting each payment's anchor.
   // The cycleEndDate of a paid year becomes the cycleStartDate of the next.
   // For an unpaid year, cycle = previous_end + 365 (default behavior).
-  let cycleStart = new Date(created);
+  let cycleStart = new Date(effectiveStart);
   let year = 1;
   const MAX_YEARS = 50; // safety
 
@@ -12779,7 +12788,10 @@ function renderRenewalsPage() {
                       ${r.simProvider ? `<br><span style="font-size:0.72rem; color:#64748b;">${escapeHtml(r.simProvider)}</span>` : ""}
                       ${latestDoc ? renderDocBadge(latestDoc) : ""}
                     </td>
-                    <td class="date-cell">${formatDateIndian(r.createdDate)}</td>
+                    <td class="date-cell">
+                      ${formatDateIndian(r.createdDate)}
+                      ${(r.freeTrialDays || 0) > 0 ? `<br><span class="trial-badge" title="Y1 billing cycle shifted by ${r.freeTrialDays} days">⏱ +${r.freeTrialDays}d trial</span>` : ""}
+                    </td>
                     <td class="date-cell">
                       ${formatDateIndian(status.nextExpiryDate)}<br>
                       <span style="font-size:0.72rem; font-weight:${isOverdue ? '700' : '400'}; color:${(isOverdue || status.daysUntilExpiry < 0) ? '#dc2626' : '#64748b'};">${daysText}</span>
@@ -12791,6 +12803,9 @@ function renderRenewalsPage() {
                       ` : `
                         <button type="button" class="btn btn-primary btn-sm collect-payment-btn ${isOverdue ? 'btn-critical' : ''}" data-id="${escapeHtml(r.id)}" data-year="${payYear}">💰 Pay Year ${payYear}</button>
                       `}
+                      ${(status.currentYear === 1 && !status.isCurrentYearPaid) ? `
+                        <button type="button" class="btn btn-outline btn-sm renewal-trial-btn ${(r.freeTrialDays || 0) > 0 ? 'is-active' : ''}" data-id="${escapeHtml(r.id)}" title="Y1 free trial settings">⏱</button>
+                      ` : ""}
                       <button type="button" class="btn btn-outline btn-sm renewal-history-btn" data-id="${escapeHtml(r.id)}" title="Payment history">📋</button>
                       ${isAdmin ? `<button type="button" class="btn btn-outline btn-sm renewal-delete-btn" data-id="${escapeHtml(r.id)}" title="Delete">🗑</button>` : ""}
                     </td>
@@ -12841,6 +12856,9 @@ function renderRenewalsPage() {
                   ` : `
                     <button type="button" class="btn btn-primary btn-sm collect-payment-btn ${isOverdue ? 'btn-critical' : ''}" data-id="${escapeHtml(r.id)}" data-year="${payYear}">💰 Pay Year ${payYear}</button>
                   `}
+                  ${(status.currentYear === 1 && !status.isCurrentYearPaid) ? `
+                    <button type="button" class="btn btn-outline btn-sm renewal-trial-btn ${(r.freeTrialDays || 0) > 0 ? 'is-active' : ''}" data-id="${escapeHtml(r.id)}">⏱ Trial${(r.freeTrialDays || 0) > 0 ? ` +${r.freeTrialDays}d` : ''}</button>
+                  ` : ""}
                   <button type="button" class="btn btn-outline btn-sm renewal-history-btn" data-id="${escapeHtml(r.id)}">📋 History</button>
                   ${isAdmin ? `<button type="button" class="btn btn-outline btn-sm renewal-delete-btn" data-id="${escapeHtml(r.id)}">🗑</button>` : ""}
                 </div>
@@ -12961,6 +12979,116 @@ function renderRenewalsPage() {
   app.querySelectorAll(".renewal-delete-btn").forEach((btn) => {
     btn.addEventListener("click", () => deleteRenewalConfirm(btn.dataset.id));
   });
+  app.querySelectorAll(".renewal-trial-btn").forEach((btn) => {
+    btn.addEventListener("click", () => openFreeTrialModal(btn.dataset.id));
+  });
+}
+
+/* ============================================================
+   v3.9.13 — Y1 FREE TRIAL MODAL
+   ============================================================ */
+const FREE_TRIAL_DAYS = 8; // business rule: 8 days free trial on first subscription
+
+function openFreeTrialModal(renewalId) {
+  const r = renewals.find((x) => x.id === renewalId);
+  if (!r) { showToast("Vehicle not found.", true); return; }
+
+  const status = computeRenewalStatus(r);
+  if (status.currentYear > 1 || status.isCurrentYearPaid) {
+    showToast("Free trial can only be set before Y1 is paid.", true);
+    return;
+  }
+
+  const currentTrialDays = Number(r.freeTrialDays) || 0;
+  const createdDateStr = formatDateIndian(r.createdDate);
+
+  // Preview computed Y1 window for the user
+  const createdObj = new Date(r.createdDate);
+  createdObj.setHours(0, 0, 0, 0);
+  const previewStartWith  = addDaysLocal(createdObj, FREE_TRIAL_DAYS);
+  const previewEndWith    = addDaysLocal(previewStartWith, RENEWAL_CYCLE_DAYS);
+  const previewStartNo    = new Date(createdObj);
+  const previewEndNo      = addDaysLocal(previewStartNo, RENEWAL_CYCLE_DAYS);
+
+  modal.innerHTML = `
+    <div class="trial-modal-head">
+      <h3>⏱ Y1 Free Trial Settings</h3>
+      <p class="modal-desc"><strong>${escapeHtml(r.plateNumber)}</strong> · ${escapeHtml(r.vehicleName || '')}</p>
+    </div>
+
+    <div class="trial-info-box">
+      <div class="trial-info-row"><span>Actual Installation Date:</span><strong>${createdDateStr}</strong></div>
+    </div>
+
+    <label class="doc-toggle trial-toggle">
+      <input type="checkbox" id="trialCheckbox" ${currentTrialDays > 0 ? 'checked' : ''} />
+      <span class="doc-toggle-track"><span class="doc-toggle-thumb"></span></span>
+      <span class="doc-toggle-label">Apply <strong>${FREE_TRIAL_DAYS} days free trial</strong> on Y1</span>
+    </label>
+
+    <div class="trial-preview">
+      <div class="trial-preview-title">📅 Y1 Billing Cycle Preview</div>
+      <div class="trial-preview-grid">
+        <div class="trial-preview-col ${currentTrialDays === 0 ? 'active' : ''}" id="trialPreviewNo">
+          <div class="trial-preview-head">Without trial</div>
+          <div class="trial-preview-dates">
+            <span>${formatDateIndian(previewStartNo)}</span>
+            <span class="arrow">→</span>
+            <span>${formatDateIndian(previewEndNo)}</span>
+          </div>
+        </div>
+        <div class="trial-preview-col ${currentTrialDays > 0 ? 'active' : ''}" id="trialPreviewWith">
+          <div class="trial-preview-head">With +${FREE_TRIAL_DAYS}d trial</div>
+          <div class="trial-preview-dates">
+            <span>${formatDateIndian(previewStartWith)}</span>
+            <span class="arrow">→</span>
+            <span>${formatDateIndian(previewEndWith)}</span>
+          </div>
+        </div>
+      </div>
+      <p class="trial-note">
+        <strong>Note:</strong> Trial only applies to Y1. Y2, Y3 and later chain forward from Y1's shifted end date.
+        PI / Tax Invoice / Receipt for this vehicle will show the selected period.
+      </p>
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
+      <button type="button" class="btn btn-primary modal-confirm">💾 Save Trial Setting</button>
+    </div>
+  `;
+  modalOverlay.classList.remove("hidden");
+  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+  modalOverlay.onclick = (e) => { if (e.target === modalOverlay) closeModal(); };
+
+  // Live preview toggle highlight
+  const ck = document.getElementById("trialCheckbox");
+  const colNo = document.getElementById("trialPreviewNo");
+  const colWith = document.getElementById("trialPreviewWith");
+  ck.addEventListener("change", () => {
+    colNo.classList.toggle("active", !ck.checked);
+    colWith.classList.toggle("active", ck.checked);
+  });
+
+  const confirmBtn = modal.querySelector(".modal-confirm");
+  confirmBtn.addEventListener("click", async () => {
+    const checked = document.getElementById("trialCheckbox").checked;
+    const newDays = checked ? FREE_TRIAL_DAYS : 0;
+    await runWithBusyButton(confirmBtn, async () => {
+      try {
+        const updated = await updateRenewalFreeTrialDays(renewalId, newDays);
+        const idx = renewals.findIndex((x) => x.id === renewalId);
+        if (idx >= 0) renewals[idx] = updated;
+        closeModal();
+        showToast(checked
+          ? `✓ ${FREE_TRIAL_DAYS}-day trial applied — Y1 starts ${formatDateIndian(previewStartWith)}`
+          : `✓ Trial removed — Y1 starts ${formatDateIndian(previewStartNo)}`);
+        render();
+      } catch (err) {
+        showToast(err.message || "Save failed.", true);
+      }
+    }, "Saving…");
+  });
 }
 
 /* ---------- Payment collection modal ---------- */
@@ -12971,12 +13099,15 @@ function renderRenewalsPage() {
 function computeLastDueDateForYear(renewal, forYear) {
   const created = new Date(renewal.createdDate);
   created.setHours(0, 0, 0, 0);
-  if (forYear === 1) return new Date(created); // Year 1 cycle starts at creation
+  // v3.9.13 — apply Y1 free-trial-days shift to the effective start date
+  const freeTrialDays = Number(renewal.freeTrialDays) || 0;
+  const effectiveStart = freeTrialDays > 0 ? addDaysLocal(created, freeTrialDays) : new Date(created);
+  if (forYear === 1) return new Date(effectiveStart); // Year 1 cycle starts after trial
 
   const paymentsByYear = {};
   (renewal.payments || []).forEach((p) => { if (p.year) paymentsByYear[p.year] = p; });
 
-  let cycleStart = new Date(created);
+  let cycleStart = new Date(effectiveStart);
   for (let y = 1; y < forYear; y++) {
     const p = paymentsByYear[y];
     if (p && p.cycleEndDate) {
@@ -14407,15 +14538,24 @@ function openDocGenerationModal(docType, editDoc = null) {
       <div class="doc-form-section">
         <div class="doc-section-title">
           <span class="doc-section-icon">📍</span>
-          <span>Delivery &amp; Options</span>
+          <span>Ship To Address</span>
         </div>
         <div class="form-row">
-          <label>Ship To Address <span class="label-hint">(blank = same as Bill To)</span></label>
+          <label>Ship To <span class="label-hint">(blank = same as Bill To)</span></label>
           <textarea id="doc_shipTo" rows="2" placeholder="${escapeHtml(defaultShipTo)}">${escapeHtml(prefShipTo)}</textarea>
         </div>
-        <label class="check-label">
+      </div>
+
+      <div class="doc-form-section doc-toggle-section">
+        <div class="doc-section-title">
+          <span class="doc-section-icon">📅</span>
+          <span>Subscription Period Column</span>
+          <span class="doc-pill ${prefShowP ? 'doc-pill-on' : 'doc-pill-off'}" id="doc_showPeriod_pill">${prefShowP ? 'VISIBLE' : 'HIDDEN'}</span>
+        </div>
+        <label class="doc-toggle">
           <input type="checkbox" id="doc_showPeriod" ${prefShowP ? 'checked' : ''} />
-          <span>Include <strong>Period</strong> column (subscription start / end dates)</span>
+          <span class="doc-toggle-track"><span class="doc-toggle-thumb"></span></span>
+          <span class="doc-toggle-label">Show the <strong>Subscription Period</strong> column (dates like "09 Sept 2025 → 09 Sept 2026") in the PDF</span>
         </label>
       </div>
 
@@ -14573,6 +14713,17 @@ function openDocGenerationModal(docType, editDoc = null) {
         });
       });
     });
+    // Period toggle pill — live VISIBLE/HIDDEN state
+    const showPeriodCk = document.getElementById("doc_showPeriod");
+    const showPeriodPill = document.getElementById("doc_showPeriod_pill");
+    if (showPeriodCk && showPeriodPill) {
+      showPeriodCk.addEventListener("change", () => {
+        const on = showPeriodCk.checked;
+        showPeriodPill.textContent = on ? "VISIBLE" : "HIDDEN";
+        showPeriodPill.classList.toggle("doc-pill-on",  on);
+        showPeriodPill.classList.toggle("doc-pill-off", !on);
+      });
+    }
     refreshTotals();
   };
 
@@ -14946,6 +15097,52 @@ function buildDocumentHTML(docType, d) {
     padding: 10px;
     border-top: 1px solid #e2e8f0;
   }
+
+  /* v3.9.12 — Smart page-break control for multi-page docs */
+  @media print {
+    .pdoc2 { padding: 22px 28px 30px; }
+
+    /* Header + info card: don't split */
+    .ph-headrow,
+    .ph-info,
+    .ph-info tr,
+    .ph-info td { page-break-inside: avoid; break-inside: avoid; }
+
+    /* Each item row stays intact (no row cut mid-way) */
+    .ph-items tr,
+    .ph-items thead { page-break-inside: avoid; break-inside: avoid; }
+
+    /* Repeat items table header on each new page */
+    .ph-items thead { display: table-header-group; }
+    .ph-items tbody { display: table-row-group; }
+
+    /* Totals, Terms+Bank, Amount-words, Notes, Footer:
+       keep each block intact; try to keep them together as the "closing" sequence */
+    .ph-stack-totals,
+    .ph-stack-totals tr,
+    .ph-terms-bank,
+    .ph-terms-bank tr,
+    .ph-terms-bank td,
+    .ph-amount-words,
+    .ph-notes,
+    .ph-footer { page-break-inside: avoid; break-inside: avoid; }
+
+    /* Avoid lonely headings at page bottom */
+    .ph-box-label { page-break-after: avoid; break-after: avoid; }
+
+    /* No orphan footer */
+    .ph-electronic-note { page-break-before: avoid; break-before: avoid; }
+  }
+
+  /* Screen preview — also apply inside the viewport so the HTML preview
+     matches the printed PDF when the user scrolls through it. */
+  .ph-items tr,
+  .ph-stack-totals,
+  .ph-terms-bank,
+  .ph-terms-bank tr,
+  .ph-amount-words,
+  .ph-notes,
+  .ph-footer { page-break-inside: avoid; break-inside: avoid; }
 </style>
 </head>
 <body>

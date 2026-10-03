@@ -1020,6 +1020,7 @@ function rowToRenewal(row) {
     secondarySimProvider: row.secondary_sim_provider || "",
     gpsDeviceType: row.gps_device_type || "",
     createdDate: row.created_date,
+    freeTrialDays: Number(row.free_trial_days) || 0,
     payments: row.payments || [],
     lastUploadedAt: row.last_uploaded_at,
     lastUploadedBy: row.last_uploaded_by,
@@ -1044,6 +1045,7 @@ function renewalToRow(r) {
     secondary_sim_provider: r.secondarySimProvider || null,
     gps_device_type: r.gpsDeviceType || null,
     created_date: r.createdDate,
+    free_trial_days: Number(r.freeTrialDays) || 0,
     payments: r.payments || [],
     last_uploaded_at: r.lastUploadedAt || null,
     last_uploaded_by: r.lastUploadedBy || null,
@@ -1423,6 +1425,18 @@ async function deleteRenewalDocument(id) {
     throw new Error("Delete had no effect. Permission denied.");
   }
   return true;
+}
+
+/* v3.9.13 — Update free trial days for a single renewal */
+async function updateRenewalFreeTrialDays(renewalId, days) {
+  const { data, error } = await getDb()
+    .from("renewals")
+    .update({ free_trial_days: Number(days) || 0 })
+    .eq("id", renewalId)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return rowToRenewal(data);
 }
 
 /* ---- Update renewal with account link ---- */
