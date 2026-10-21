@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.9.13";
+const APP_VERSION = "3.9.15";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -12789,7 +12789,9 @@ function renderRenewalsPage() {
                       ${latestDoc ? renderDocBadge(latestDoc) : ""}
                     </td>
                     <td class="date-cell">
-                      ${formatDateIndian(r.createdDate)}
+                      ${isAdmin
+                        ? `<a href="#" class="edit-created-date-link" data-id="${escapeHtml(r.id)}" title="Admin: edit installation date">${formatDateIndian(r.createdDate)}</a>`
+                        : formatDateIndian(r.createdDate)}
                       ${(r.freeTrialDays || 0) > 0 ? `<br><span class="trial-badge" title="Y1 billing cycle shifted by ${r.freeTrialDays} days">⏱ +${r.freeTrialDays}d trial</span>` : ""}
                     </td>
                     <td class="date-cell">
@@ -12860,6 +12862,7 @@ function renderRenewalsPage() {
                     <button type="button" class="btn btn-outline btn-sm renewal-trial-btn ${(r.freeTrialDays || 0) > 0 ? 'is-active' : ''}" data-id="${escapeHtml(r.id)}">⏱ Trial${(r.freeTrialDays || 0) > 0 ? ` +${r.freeTrialDays}d` : ''}</button>
                   ` : ""}
                   <button type="button" class="btn btn-outline btn-sm renewal-history-btn" data-id="${escapeHtml(r.id)}">📋 History</button>
+                  ${isAdmin ? `<button type="button" class="btn btn-outline btn-sm edit-created-date-btn" data-id="${escapeHtml(r.id)}" title="Edit install date">📅 Edit Date</button>` : ""}
                   ${isAdmin ? `<button type="button" class="btn btn-outline btn-sm renewal-delete-btn" data-id="${escapeHtml(r.id)}">🗑</button>` : ""}
                 </div>
               </article>
@@ -12982,12 +12985,120 @@ function renderRenewalsPage() {
   app.querySelectorAll(".renewal-trial-btn").forEach((btn) => {
     btn.addEventListener("click", () => openFreeTrialModal(btn.dataset.id));
   });
+  // v3.9.14 — Admin: edit installation (created) date
+  app.querySelectorAll(".edit-created-date-link, .edit-created-date-btn").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      openEditCreatedDateModal(el.dataset.id);
+    });
+  });
 }
 
 /* ============================================================
    v3.9.13 — Y1 FREE TRIAL MODAL
    ============================================================ */
 const FREE_TRIAL_DAYS = 8; // business rule: 8 days free trial on first subscription
+
+/* ============================================================
+   v3.9.14 — Admin: EDIT INSTALLATION / CREATED DATE
+   ============================================================ */
+function openEditCreatedDateModal(renewalId) {
+  if (!getUserPerms(currentUser)?.isAdmin) {
+    showToast("Only admin can edit installation date.", true);
+    return;
+  }
+  const r = renewals.find((x) => x.id === renewalId);
+  if (!r) { showToast("Vehicle not found.", true); return; }
+
+  const currentDate = r.createdDate;
+  const status = computeRenewalStatus(r);
+  const paymentCount = (r.payments || []).length;
+
+  modal.innerHTML = `
+    <div class="trial-modal-head">
+      <h3>📅 Edit Installation Date</h3>
+      <p class="modal-desc"><strong>${escapeHtml(r.plateNumber)}</strong> · ${escapeHtml(r.vehicleName || '')}</p>
+    </div>
+
+    <div class="trial-info-box">
+      <div class="trial-info-row"><span>Current Installation Date:</span><strong>${formatDateIndian(currentDate)}</strong></div>
+      <div class="trial-info-row"><span>Current Status:</span><strong>Y${status.currentYear} · ${status.status}</strong></div>
+      <div class="trial-info-row"><span>Payments Recorded:</span><strong>${paymentCount}</strong></div>
+    </div>
+
+    <div class="form-row" style="margin-bottom:1rem;">
+      <label>New Installation Date <span class="required">*</span></label>
+      <input type="date" id="newCreatedDate" value="${currentDate}" max="${formatYMD(new Date())}" />
+    </div>
+
+    <div id="dateChangePreview" class="trial-preview">
+      <div class="trial-preview-title">📅 New Y1 Cycle Preview</div>
+      <div class="trial-preview-grid">
+        <div class="trial-preview-col active" id="newCycleCol">
+          <div class="trial-preview-head">New Y1 Window</div>
+          <div class="trial-preview-dates">
+            <span id="newY1Start">${formatDateIndian(currentDate)}</span>
+            <span class="arrow">→</span>
+            <span id="newY1End">${formatDateIndian(addDaysLocal(new Date(currentDate), RENEWAL_CYCLE_DAYS))}</span>
+          </div>
+        </div>
+      </div>
+      <p class="trial-note" style="color:#991b1b;">
+        <strong>⚠️ Warning:</strong> Changing this date will shift <strong>all future cycles</strong>
+        (Y1, Y2, Y3…) ${paymentCount > 0 ? `and recalculate the <strong>${paymentCount} existing payment's cycle windows</strong>.` : ''}
+        Use only for genuine data corrections.
+      </p>
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
+      <button type="button" class="btn btn-primary modal-confirm">💾 Save New Date</button>
+    </div>
+  `;
+  modalOverlay.classList.remove("hidden");
+  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+  modalOverlay.onclick = (e) => { if (e.target === modalOverlay) closeModal(); };
+
+  // Live preview — update Y1 window as user picks a new date
+  const dateInput = document.getElementById("newCreatedDate");
+  const y1Start = document.getElementById("newY1Start");
+  const y1End = document.getElementById("newY1End");
+  const trialDays = Number(r.freeTrialDays) || 0;
+  dateInput.addEventListener("input", () => {
+    const val = dateInput.value;
+    if (!val) return;
+    const d = new Date(val);
+    d.setHours(0, 0, 0, 0);
+    const effective = trialDays > 0 ? addDaysLocal(d, trialDays) : d;
+    y1Start.textContent = formatDateIndian(effective);
+    y1End.textContent = formatDateIndian(addDaysLocal(effective, RENEWAL_CYCLE_DAYS));
+  });
+
+  const confirmBtn = modal.querySelector(".modal-confirm");
+  confirmBtn.addEventListener("click", async () => {
+    const newDate = document.getElementById("newCreatedDate").value;
+    if (!newDate) { showToast("Pick a valid date.", true); return; }
+    if (newDate === currentDate) { showToast("Date is unchanged.", true); return; }
+
+    const confirmMsg = paymentCount > 0
+      ? `This will shift all cycles AND recalculate ${paymentCount} payment cycle windows. Continue?`
+      : `Change installation date from ${formatDateIndian(currentDate)} to ${formatDateIndian(newDate)}?`;
+    if (!confirm(confirmMsg)) return;
+
+    await runWithBusyButton(confirmBtn, async () => {
+      try {
+        const updated = await updateRenewalCreatedDate(renewalId, newDate);
+        const idx = renewals.findIndex((x) => x.id === renewalId);
+        if (idx >= 0) renewals[idx] = updated;
+        closeModal();
+        showToast(`✓ Installation date updated to ${formatDateIndian(newDate)}`);
+        render();
+      } catch (err) {
+        showToast(err.message || "Save failed.", true);
+      }
+    }, "Saving…");
+  });
+}
 
 function openFreeTrialModal(renewalId) {
   const r = renewals.find((x) => x.id === renewalId);
@@ -14981,16 +15092,14 @@ function buildDocumentHTML(docType, d) {
   .ph-bizmeta { font-size: 9px; line-height: 1.6; color: #334155; margin-top: 4px; text-transform: none; }
   .ph-doctitle { font-size: 15.5px; font-weight: 400; color: var(--ph-primary); letter-spacing: -0.005em; }
 
-  .ph-outline-wrap {
-    margin-top: 16px;
-    border-left: var(--ph-border-w) solid var(--ph-border);
-    border-right: var(--ph-border-w) solid var(--ph-border);
-  }
+  /* v3.9.15 — Removed .ph-outline-wrap dependency.
+     Each table now has its own full border so page-break
+     continuations keep left/right borders cleanly (fixes
+     Safari print issue where div borders break across pages). */
 
   .ph-info {
-    margin-top: 0;
-    border-top: var(--ph-border-w) solid var(--ph-border);
-    border-bottom: var(--ph-border-w) solid var(--ph-border);
+    margin-top: 16px;
+    border: var(--ph-border-w) solid var(--ph-border);
   }
   .ph-info td {
     border-right: var(--ph-border-w) solid var(--ph-border);
@@ -15007,13 +15116,9 @@ function buildDocumentHTML(docType, d) {
   .ph-box-label { font-weight: 700; font-size: 11.5px; margin-bottom: 7px; color: var(--ph-primary); letter-spacing: 0.03em; }
   .ph-sub-label { font-weight: 700; font-size: 9.5px; margin-top: 9px; margin-bottom: 4px; color: var(--ph-primary); letter-spacing: 0.03em; }
 
-  .ph-spacer-row { width: 100%; }
-  .ph-spacer-row td { height: 16px; padding: 0; border: none; }
-
   .ph-items {
-    margin-top: 0;
-    border-top: var(--ph-border-w) solid var(--ph-border);
-    border-bottom: var(--ph-border-w) solid var(--ph-border);
+    margin-top: 10px;
+    border: var(--ph-border-w) solid var(--ph-border);
   }
   .ph-items th, .ph-items td {
     border: var(--ph-border-w) solid var(--ph-border);
@@ -15098,26 +15203,44 @@ function buildDocumentHTML(docType, d) {
     border-top: 1px solid #e2e8f0;
   }
 
-  /* v3.9.12 — Smart page-break control for multi-page docs */
+  /* v3.9.15 — Robust page-break control (Safari/Chrome/Firefox) */
   @media print {
-    .pdoc2 { padding: 22px 28px 30px; }
+    @page { size: A4; margin: 10mm 12mm 10mm 12mm; }
+    html, body { background: #fff !important; }
+    .pdoc2 { padding: 0; margin: 0 auto; max-width: 100%; }
 
-    /* Header + info card: don't split */
+    /* Header + info card: never split */
     .ph-headrow,
     .ph-info,
     .ph-info tr,
-    .ph-info td { page-break-inside: avoid; break-inside: avoid; }
+    .ph-info td {
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+    }
 
-    /* Each item row stays intact (no row cut mid-way) */
-    .ph-items tr,
-    .ph-items thead { page-break-inside: avoid; break-inside: avoid; }
+    /* Items table — the critical one for long docs */
+    .ph-items {
+      border-collapse: collapse !important;
+    }
+    /* Thead repeats on every page */
+    .ph-items thead {
+      display: table-header-group !important;
+    }
+    .ph-items tbody {
+      display: table-row-group !important;
+    }
+    /* Each row stays whole; cell borders stay intact across pages */
+    .ph-items tr {
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+    }
+    .ph-items th,
+    .ph-items td {
+      border: var(--ph-border-w) solid var(--ph-border) !important;
+    }
 
-    /* Repeat items table header on each new page */
-    .ph-items thead { display: table-header-group; }
-    .ph-items tbody { display: table-row-group; }
-
-    /* Totals, Terms+Bank, Amount-words, Notes, Footer:
-       keep each block intact; try to keep them together as the "closing" sequence */
+    /* Totals + Terms/Bank + Amount-in-words + Footer:
+       keep EACH block intact AND try to group them together */
     .ph-stack-totals,
     .ph-stack-totals tr,
     .ph-terms-bank,
@@ -15125,17 +15248,23 @@ function buildDocumentHTML(docType, d) {
     .ph-terms-bank td,
     .ph-amount-words,
     .ph-notes,
-    .ph-footer { page-break-inside: avoid; break-inside: avoid; }
+    .ph-footer {
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+    }
+    /* Keep totals attached to terms-bank where possible */
+    .ph-stack-totals { page-break-after: avoid; break-after: avoid; }
+    .ph-terms-bank  { page-break-after: avoid; break-after: avoid; }
+    .ph-amount-words{ page-break-after: avoid; break-after: avoid; }
 
     /* Avoid lonely headings at page bottom */
     .ph-box-label { page-break-after: avoid; break-after: avoid; }
 
-    /* No orphan footer */
+    /* No orphan electronic footer */
     .ph-electronic-note { page-break-before: avoid; break-before: avoid; }
   }
 
-  /* Screen preview — also apply inside the viewport so the HTML preview
-     matches the printed PDF when the user scrolls through it. */
+  /* Screen preview — apply inside the viewport too */
   .ph-items tr,
   .ph-stack-totals,
   .ph-terms-bank,
@@ -15173,72 +15302,65 @@ function buildDocumentHTML(docType, d) {
     </tr>
   </table>
 
-  <!-- Outlined block: info strip + items -->
-  <div class="ph-outline-wrap">
+  <!-- 3-column info: metadata / Billed By (seller) / Billed To (customer) -->
+  <table class="ph-info">
+    <tr>
+      <td class="ph-info-col">
+        <div>
+          <span class="ph-label">${metaLabel} No #</span><br>
+          <b class="ph-strong">${escapeHtml(d.docNumber)}</b>
+        </div>
+        <div>
+          <span class="ph-label">${metaLabel} Date</span><br>
+          <b class="ph-strong">${formatDateIndian(d.docDate)}</b>
+        </div>
+        ${docType === "PI" ? `
+          <div>
+            <span class="ph-label">Valid Until</span><br>
+            <b class="ph-strong">30 days from issue</b>
+          </div>` : ""}
+        ${docType === "R" && d.paymentMode ? `
+          <div>
+            <span class="ph-label">Payment Mode</span><br>
+            <b class="ph-strong">${escapeHtml(d.paymentMode.toUpperCase())}</b>
+          </div>` : ""}
+      </td>
 
-    <!-- 3-column info: metadata / Billed By (seller) / Billed To (customer) -->
-    <table class="ph-info">
+      <td class="ph-box ph-box-billed">
+        <div class="ph-box-label">Billed By</div>
+        <b class="ph-strong">${escapeHtml(seller.businessName || "")}</b><br>
+        ${seller.address ? `${escapeHtml(seller.address)}<br>` : ""}
+        ${escapeHtml([seller.city, seller.state, seller.pincode].filter(Boolean).join(", "))}
+        ${seller.gstin ? `<br>GSTIN: <b>${escapeHtml(seller.gstin)}</b>` : ""}
+        ${seller.pan ? `<br>PAN: <b>${escapeHtml(seller.pan)}</b>` : ""}
+        ${seller.contactPhone ? `<br>Phone: <b>${escapeHtml(seller.contactPhone)}</b>` : ""}
+        ${seller.contactEmail ? `<br>Email: <b>${escapeHtml(seller.contactEmail)}</b>` : ""}
+      </td>
+
+      <td class="ph-box ph-box-billed">
+        <div class="ph-box-label">${docType === "R" ? "Received From" : "Billed To"}</div>
+        ${billedToHtml}
+        ${shipToHtml ? `
+          <div class="ph-sub-label">Ship To</div>
+          ${shipToHtml}` : ""}
+      </td>
+    </tr>
+  </table>
+
+  <!-- Items table — self-contained borders so page breaks keep left/right lines -->
+  <table class="ph-items">
+    <thead>
       <tr>
-        <td class="ph-info-col">
-          <div>
-            <span class="ph-label">${metaLabel} No #</span><br>
-            <b class="ph-strong">${escapeHtml(d.docNumber)}</b>
-          </div>
-          <div>
-            <span class="ph-label">${metaLabel} Date</span><br>
-            <b class="ph-strong">${formatDateIndian(d.docDate)}</b>
-          </div>
-          ${docType === "PI" ? `
-            <div>
-              <span class="ph-label">Valid Until</span><br>
-              <b class="ph-strong">30 days from issue</b>
-            </div>` : ""}
-          ${docType === "R" && d.paymentMode ? `
-            <div>
-              <span class="ph-label">Payment Mode</span><br>
-              <b class="ph-strong">${escapeHtml(d.paymentMode.toUpperCase())}</b>
-            </div>` : ""}
-        </td>
-
-        <td class="ph-box ph-box-billed">
-          <div class="ph-box-label">Billed By</div>
-          <b class="ph-strong">${escapeHtml(seller.businessName || "")}</b><br>
-          ${seller.address ? `${escapeHtml(seller.address)}<br>` : ""}
-          ${escapeHtml([seller.city, seller.state, seller.pincode].filter(Boolean).join(", "))}
-          ${seller.gstin ? `<br>GSTIN: <b>${escapeHtml(seller.gstin)}</b>` : ""}
-          ${seller.pan ? `<br>PAN: <b>${escapeHtml(seller.pan)}</b>` : ""}
-          ${seller.contactPhone ? `<br>Phone: <b>${escapeHtml(seller.contactPhone)}</b>` : ""}
-          ${seller.contactEmail ? `<br>Email: <b>${escapeHtml(seller.contactEmail)}</b>` : ""}
-        </td>
-
-        <td class="ph-box ph-box-billed">
-          <div class="ph-box-label">${docType === "R" ? "Received From" : "Billed To"}</div>
-          ${billedToHtml}
-          ${shipToHtml ? `
-            <div class="ph-sub-label">Ship To</div>
-            ${shipToHtml}` : ""}
-        </td>
+        <th style="width:22px; text-align:center;">#</th>
+        <th>Vehicle</th>
+        <th>IMEI</th>
+        <th style="text-align:center;">HSN/SAC</th>
+        ${showPeriod ? `<th>Subscription Period</th>` : ""}
+        <th style="text-align:right;">Rate / Amount (₹)</th>
       </tr>
-    </table>
-
-    <table class="ph-spacer-row"><tr><td>&nbsp;</td></tr></table>
-
-    <!-- Items -->
-    <table class="ph-items">
-      <thead>
-        <tr>
-          <th style="width:22px; text-align:center;">#</th>
-          <th>Vehicle</th>
-          <th>IMEI</th>
-          <th style="text-align:center;">HSN/SAC</th>
-          ${showPeriod ? `<th>Subscription Period</th>` : ""}
-          <th style="text-align:right;">Rate / Amount (₹)</th>
-        </tr>
-      </thead>
-      <tbody>${itemsHtml}</tbody>
-    </table>
-
-  </div><!-- /.ph-outline-wrap -->
+    </thead>
+    <tbody>${itemsHtml}</tbody>
+  </table>
 
   <!-- Right-aligned stack totals -->
   <table class="ph-stack-totals">
