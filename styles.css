@@ -11841,3 +11841,15 @@ button.clickable-card:focus-visible {
   color: #78350f;
   box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.3);
 }
+
+/* v3.9.16 — Engine switch button (🔬 switch to ZXing stronger scanner) */
+.qr-icon-btn#bulkEngineBtn,
+.qr-icon-btn#singleEngineBtn {
+  background: rgba(15, 23, 42, 0.75);
+}
+
+.qr-icon-btn#bulkEngineBtn:hover,
+.qr-icon-btn#singleEngineBtn:hover {
+  background: #0891b2;
+  color: #fff;
+}
