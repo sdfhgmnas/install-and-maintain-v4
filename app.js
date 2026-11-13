@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.9.15";
+const APP_VERSION = "3.9.16";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -1697,6 +1697,8 @@ async function prewarmCamera() {
   if (_cameraPrewarmed) return;
   if (!navigator.mediaDevices?.getUserMedia) return;
   try {
+    // Prewarm just needs permission; resolution doesn't matter here.
+    // Use original low res to avoid fail on older devices.
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: "environment" }, width: { ideal: 640 }, height: { ideal: 480 } },
       audio: false,
@@ -1750,16 +1752,21 @@ async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Po
       <div class="qr-scan-line"></div>
       <div class="qr-focus-ring" id="singleFocusRing"></div>
       <div class="qr-controls">
-        <button type="button" class="qr-icon-btn" id="singleTorchBtn" style="display:none;" aria-label="Torch">🔦</button>
+        <button type="button" class="qr-icon-btn" id="singleTorchBtn" aria-label="Torch">🔦</button>
+      </div>
+      <div class="qr-zoom-control" id="singleZoomWrap" style="display:none;">
+        <span class="qr-zoom-label">🔍</span>
+        <input type="range" id="singleZoomSlider" min="1" max="5" step="0.1" value="2" />
+        <span class="qr-zoom-val" id="singleZoomVal">2.0×</span>
       </div>
       <div class="qr-status" id="qrStatus">${escapeHtml(hint)}</div>
     </div>
 
-    <div class="manual-entry-block" style="margin-top: 0.7rem;">
-      <label for="manualScanInput">Or type the number manually:</label>
+    <div class="manual-entry-block" style="margin-top: 0.7rem; background:#fef3c7; border:1.5px solid #fde68a; padding: 0.7rem; border-radius: 8px;">
+      <label for="manualScanInput" style="font-weight:700; color:#92400e;">✏️ Scan nahi ho raha? Type karo:</label>
       <div class="input-with-scan" style="margin-top: 0.4rem;">
-        <input type="text" id="manualScanInput" autocomplete="off" inputmode="numeric" placeholder="Paste or type the number" />
-        <button type="button" class="btn btn-primary btn-sm" id="manualScanOk">OK</button>
+        <input type="text" id="manualScanInput" autocomplete="off" inputmode="numeric" placeholder="Barcode ke neeche jo number likha hai wo type karo" style="font-size:1rem; padding:0.6rem;" />
+        <button type="button" class="btn btn-primary" id="manualScanOk" style="padding:0.6rem 1.2rem;">✓ OK</button>
       </div>
     </div>
 
@@ -1938,37 +1945,45 @@ async function initNativeSingleScanner(onDetect, setStatus, captureStream, isAct
 
     setStatus("Requesting camera permission…");
 
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
-        audio: false,
-      });
-    } catch (err) {
+    // v3.9.16 — Try HD first (helps small/dense barcodes like PT06).
+    // Silently falls back to the original (unconstrained) behavior if HD
+    // fails — so older phones never see a regression.
+    const HI_RES = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+    const tryGUM = async (constraints) => {
+      try { return await navigator.mediaDevices.getUserMedia(constraints); }
+      catch { return null; }
+    };
+
+    let stream = null;
+
+    // Pass 1 — ideal environment + HD
+    stream = await tryGUM({ video: { facingMode: { ideal: "environment" }, ...HI_RES }, audio: false });
+    // Pass 2 — ideal environment WITHOUT HD (original behaviour)
+    if (!stream) stream = await tryGUM({ video: { facingMode: { ideal: "environment" } }, audio: false });
+    // Pass 3 — exact environment + HD
+    if (!stream) stream = await tryGUM({ video: { facingMode: { exact: "environment" }, ...HI_RES }, audio: false });
+    // Pass 4 — exact environment WITHOUT HD
+    if (!stream) stream = await tryGUM({ video: { facingMode: { exact: "environment" } }, audio: false });
+
+    // Pass 5 — enumerate + back-cam by deviceId
+    if (!stream) {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { exact: "environment" } },
-          audio: false,
-        });
-      } catch (err2) {
-        try {
-          const devices = await navigator.mediaDevices.enumerateDevices();
-          const cams = devices.filter((d) => d.kind === "videoinput");
-          const back = cams.find((c) => /back|rear|environment|world|wide(?!.*front)/i.test(c.label || ""));
-          if (back) {
-            stream = await navigator.mediaDevices.getUserMedia({
-              video: { deviceId: { exact: back.deviceId } },
-              audio: false,
-            });
-          } else {
-            setStatus("❌ Back camera not found. Use manual entry.");
-            return;
-          }
-        } catch (err3) {
-          setStatus("❌ Camera permission denied or unavailable");
-          return;
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cams = devices.filter((d) => d.kind === "videoinput");
+        const back = cams.find((c) => /back|rear|environment|world|wide(?!.*front)/i.test(c.label || ""));
+        if (back) {
+          stream = await tryGUM({ video: { deviceId: { exact: back.deviceId }, ...HI_RES }, audio: false });
+          if (!stream) stream = await tryGUM({ video: { deviceId: { exact: back.deviceId } }, audio: false });
         }
-      }
+      } catch {}
+    }
+
+    // Pass 6 — any camera at all (last resort)
+    if (!stream) stream = await tryGUM({ video: true, audio: false });
+
+    if (!stream) {
+      setStatus("❌ Camera permission denied or unavailable");
+      return;
     }
 
     captureStream(stream);
@@ -2015,25 +2030,51 @@ async function initNativeSingleScanner(onDetect, setStatus, captureStream, isAct
         if (capabilities.focusMode && capabilities.focusMode.includes("continuous")) {
           advanced.push({ focusMode: "continuous" });
         }
+        // v3.9.16 — Default zoom bumped to 2× for small barcodes (PT06 etc.)
         if (capabilities.zoom) {
-          const z = Math.min(Math.max(1.5, capabilities.zoom.min || 1), capabilities.zoom.max || 1);
-          advanced.push({ zoom: z });
+          const defaultZ = Math.min(Math.max(2.0, capabilities.zoom.min || 1), capabilities.zoom.max || 1);
+          advanced.push({ zoom: defaultZ });
+
+          // Wire manual zoom slider — range from device min to min(device max, 5×)
+          const zoomWrap   = document.getElementById("singleZoomWrap");
+          const zoomSlider = document.getElementById("singleZoomSlider");
+          const zoomVal    = document.getElementById("singleZoomVal");
+          if (zoomWrap && zoomSlider && zoomVal) {
+            const zMin = capabilities.zoom.min || 1;
+            const zMax = Math.min(capabilities.zoom.max || 5, 5);
+            zoomSlider.min  = zMin;
+            zoomSlider.max  = zMax;
+            zoomSlider.step = capabilities.zoom.step || 0.1;
+            zoomSlider.value = defaultZ;
+            zoomVal.textContent = `${defaultZ.toFixed(1)}×`;
+            zoomWrap.style.display = "flex";
+            zoomSlider.addEventListener("input", async () => {
+              const z = parseFloat(zoomSlider.value);
+              zoomVal.textContent = `${z.toFixed(1)}×`;
+              try { await track.applyConstraints({ advanced: [{ zoom: z }] }); } catch {}
+            });
+          }
         }
         if (advanced.length) await track.applyConstraints({ advanced }).catch(() => {});
 
-        if (capabilities.torch) {
-          const torchBtn = document.getElementById("singleTorchBtn");
-          if (torchBtn) {
-            torchBtn.style.display = "flex";
-            let torchOn = false;
-            torchBtn.addEventListener("click", async () => {
-              torchOn = !torchOn;
-              try {
-                await track.applyConstraints({ advanced: [{ torch: torchOn }] });
-                torchBtn.classList.toggle("active", torchOn);
-              } catch {}
-            });
-          }
+        // v3.9.16 — Torch always visible; if device doesn't support it,
+        // button shows a toast so user knows it's phone-side, not app-side.
+        const torchBtn = document.getElementById("singleTorchBtn");
+        if (torchBtn) {
+          let torchOn = false;
+          torchBtn.addEventListener("click", async () => {
+            if (!capabilities.torch) {
+              showToast("Phone doesn't expose torch control to browser.", true);
+              return;
+            }
+            torchOn = !torchOn;
+            try {
+              await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+              torchBtn.classList.toggle("active", torchOn);
+            } catch {
+              showToast("Couldn't toggle torch.", true);
+            }
+          });
         }
       } catch (e) { console.warn("Camera tweaks failed:", e); }
     }
