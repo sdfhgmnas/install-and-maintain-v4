@@ -11494,15 +11494,21 @@ function openBulkScanModal() {
       <video id="bulkScanVideo" autoplay playsinline muted></video>
       <div class="qr-scan-line"></div>
       <div class="qr-controls">
-        <button type="button" class="qr-icon-btn" id="bulkTorchBtn" style="display:none;" aria-label="Torch">🔦</button>
+        <button type="button" class="qr-icon-btn" id="bulkTorchBtn" aria-label="Torch">🔦</button>
+      </div>
+      <div class="qr-zoom-control" id="bulkZoomWrap" style="display:none;">
+        <span class="qr-zoom-label">🔍</span>
+        <input type="range" id="bulkZoomSlider" min="1" max="5" step="0.1" value="2" />
+        <span class="qr-zoom-val" id="bulkZoomVal">2.0×</span>
       </div>
       <div class="qr-status" id="qrStatus">Initialising camera…</div>
     </div>
 
-    <div class="manual-entry-block" style="margin-top: 0.7rem;">
+    <div class="manual-entry-block" style="margin-top: 0.7rem; background:#fef3c7; border:1.5px solid #fde68a; padding: 0.7rem; border-radius: 8px;">
+      <label style="font-weight:700; color:#92400e; display:block; margin-bottom: 0.3rem;">✏️ Scan nahi ho raha? Type karo:</label>
       <div class="input-with-scan">
-        <input type="text" id="bulkManualImei" placeholder="Or type ${escapeHtml(typeInfo.label)} manually" inputmode="numeric" autocomplete="off" />
-        <button type="button" class="btn btn-primary btn-sm" id="bulkManualAdd">+ Add</button>
+        <input type="text" id="bulkManualImei" placeholder="Or type ${escapeHtml(typeInfo.label)} manually" inputmode="numeric" autocomplete="off" style="font-size:1rem; padding:0.6rem;" />
+        <button type="button" class="btn btn-primary" id="bulkManualAdd" style="padding:0.6rem 1.2rem;">+ Add</button>
       </div>
     </div>
 
@@ -11764,45 +11770,40 @@ async function initNativeBulkScanner(addImei, setStatus, cleanup) {
 
     setStatus("Requesting camera permission…");
 
-    // STRICT: enforce back camera. First try with `ideal`, then `exact`,
-    // then enumerate devices and explicitly pick a back-facing camera by label.
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
-        audio: false,
-      });
-    } catch (err) {
-      console.error("getUserMedia ideal-environment failed:", err);
-      // Try exact
+    // STRICT: enforce back camera. v3.9.16 — Try HD first for small/dense
+    // barcodes (PT06 etc.), silently fall back to default resolution if HD fails.
+    const HI_RES_B = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+    const tryGUM = async (c) => {
+      try { return await navigator.mediaDevices.getUserMedia(c); } catch { return null; }
+    };
+
+    let stream = null;
+    // Pass 1 — ideal environment + HD
+    stream = await tryGUM({ video: { facingMode: { ideal: "environment" }, ...HI_RES_B }, audio: false });
+    // Pass 2 — ideal environment WITHOUT HD (original)
+    if (!stream) stream = await tryGUM({ video: { facingMode: { ideal: "environment" } }, audio: false });
+    // Pass 3 — exact environment + HD
+    if (!stream) stream = await tryGUM({ video: { facingMode: { exact: "environment" }, ...HI_RES_B }, audio: false });
+    // Pass 4 — exact environment WITHOUT HD
+    if (!stream) stream = await tryGUM({ video: { facingMode: { exact: "environment" } }, audio: false });
+    // Pass 5 — enumerate + back-cam by deviceId
+    if (!stream) {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { exact: "environment" } },
-          audio: false,
-        });
-      } catch (err2) {
-        console.warn("getUserMedia exact-environment failed:", err2);
-        // Enumerate devices, find by label
-        try {
-          const devices = await navigator.mediaDevices.enumerateDevices();
-          const cams = devices.filter((d) => d.kind === "videoinput");
-          const back = cams.find((c) => /back|rear|environment|world|wide(?!.*front)/i.test(c.label || ""));
-          if (back) {
-            stream = await navigator.mediaDevices.getUserMedia({
-              video: { deviceId: { exact: back.deviceId } },
-              audio: false,
-            });
-          } else {
-            console.error("No back-facing camera found");
-            setStatus("❌ Back camera not found. Use manual entry.");
-            return;
-          }
-        } catch (err3) {
-          console.error("Camera enumeration failed:", err3);
-          setStatus("❌ Camera permission denied or unavailable");
-          return;
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cams = devices.filter((d) => d.kind === "videoinput");
+        const back = cams.find((c) => /back|rear|environment|world|wide(?!.*front)/i.test(c.label || ""));
+        if (back) {
+          stream = await tryGUM({ video: { deviceId: { exact: back.deviceId }, ...HI_RES_B }, audio: false });
+          if (!stream) stream = await tryGUM({ video: { deviceId: { exact: back.deviceId } }, audio: false });
         }
-      }
+      } catch (e) { console.warn("Enum failed:", e); }
+    }
+    // Pass 6 — any camera at all
+    if (!stream) stream = await tryGUM({ video: true, audio: false });
+
+    if (!stream) {
+      setStatus("❌ Camera permission denied or unavailable");
+      return;
     }
 
     // Verify what we actually got — if it's front, warn
@@ -11831,26 +11832,48 @@ async function initNativeBulkScanner(addImei, setStatus, cleanup) {
         if (capabilities.focusMode && capabilities.focusMode.includes("continuous")) {
           advanced.push({ focusMode: "continuous" });
         }
+        // v3.9.16 — Default zoom 2× for small barcodes (PT06)
         if (capabilities.zoom) {
-          const z = Math.min(Math.max(1.5, capabilities.zoom.min || 1), capabilities.zoom.max || 1);
-          advanced.push({ zoom: z });
+          const defaultZ = Math.min(Math.max(2.0, capabilities.zoom.min || 1), capabilities.zoom.max || 1);
+          advanced.push({ zoom: defaultZ });
+
+          // Wire manual zoom slider
+          const zoomWrap   = document.getElementById("bulkZoomWrap");
+          const zoomSlider = document.getElementById("bulkZoomSlider");
+          const zoomVal    = document.getElementById("bulkZoomVal");
+          if (zoomWrap && zoomSlider && zoomVal) {
+            const zMin = capabilities.zoom.min || 1;
+            const zMax = Math.min(capabilities.zoom.max || 5, 5);
+            zoomSlider.min  = zMin;
+            zoomSlider.max  = zMax;
+            zoomSlider.step = capabilities.zoom.step || 0.1;
+            zoomSlider.value = defaultZ;
+            zoomVal.textContent = `${defaultZ.toFixed(1)}×`;
+            zoomWrap.style.display = "flex";
+            zoomSlider.addEventListener("input", async () => {
+              const z = parseFloat(zoomSlider.value);
+              zoomVal.textContent = `${z.toFixed(1)}×`;
+              try { await track.applyConstraints({ advanced: [{ zoom: z }] }); } catch {}
+            });
+          }
         }
         if (advanced.length) await track.applyConstraints({ advanced }).catch(() => {});
 
-        // Torch button if supported
-        if (capabilities.torch) {
-          const torchBtn = document.getElementById("bulkTorchBtn");
-          if (torchBtn) {
-            torchBtn.style.display = "flex";
-            let torchOn = false;
-            torchBtn.addEventListener("click", async () => {
-              torchOn = !torchOn;
-              try {
-                await track.applyConstraints({ advanced: [{ torch: torchOn }] });
-                torchBtn.classList.toggle("active", torchOn);
-              } catch (e) {}
-            });
-          }
+        // Torch — always visible; unsupported shows toast
+        const torchBtn = document.getElementById("bulkTorchBtn");
+        if (torchBtn) {
+          let torchOn = false;
+          torchBtn.addEventListener("click", async () => {
+            if (!capabilities.torch) {
+              showToast("Phone doesn't expose torch control to browser.", true);
+              return;
+            }
+            torchOn = !torchOn;
+            try {
+              await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+              torchBtn.classList.toggle("active", torchOn);
+            } catch { showToast("Couldn't toggle torch.", true); }
+          });
         }
       } catch (e) {
         console.warn("Advanced camera settings failed (non-fatal):", e);
