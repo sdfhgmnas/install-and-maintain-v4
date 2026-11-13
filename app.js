@@ -11495,6 +11495,7 @@ function openBulkScanModal() {
       <div class="qr-scan-line"></div>
       <div class="qr-controls">
         <button type="button" class="qr-icon-btn" id="bulkTorchBtn" aria-label="Torch">🔦</button>
+        <button type="button" class="qr-icon-btn" id="bulkEngineBtn" aria-label="Switch to stronger scanner" title="Use stronger engine (ZXing)">🔬</button>
       </div>
       <div class="qr-zoom-control" id="bulkZoomWrap" style="display:none;">
         <span class="qr-zoom-label">🔍</span>
@@ -11882,19 +11883,59 @@ async function initNativeBulkScanner(addImei, setStatus, cleanup) {
 
     // ----- Scan loop -----
     let scanErrCount = 0;
+    let lastDetectedAt = Date.now();
+    let switchedToZXing = false;
+
+    // v3.9.16 — Auto-switch to ZXing (stronger engine) after 8s with no detection,
+    // OR manual switch via 🔬 button. ZXing matches dedicated scanner apps better
+    // for small/dense barcodes like PT06.
+    const switchToZXing = async () => {
+      if (switchedToZXing || !_bulkScanState.active) return;
+      switchedToZXing = true;
+      setStatus("🔬 Switching to stronger scanner (ZXing)…");
+      try {
+        // Stop current stream
+        try { stream.getTracks().forEach((t) => t.stop()); } catch {}
+        // Hand off to html5-qrcode fallback
+        initFallbackBulkScanner(addImei, setStatus);
+      } catch (e) {
+        console.warn("Engine switch failed:", e);
+        setStatus("Scanner switch failed — type manually below");
+      }
+    };
+
+    // Manual switch via 🔬 button
+    const engineBtn = document.getElementById("bulkEngineBtn");
+    if (engineBtn) {
+      engineBtn.addEventListener("click", () => {
+        if (switchedToZXing) {
+          showToast("Already using stronger scanner.", true);
+          return;
+        }
+        showToast("Switching to stronger scanner…");
+        switchToZXing();
+      });
+    }
+
     const scanLoop = async () => {
-      if (!_bulkScanState.active) return;
+      if (!_bulkScanState.active || switchedToZXing) return;
       try {
         if (video.readyState >= 2 && video.videoWidth > 0) {
           const barcodes = await detector.detect(video);
           if (barcodes && barcodes.length > 0) {
             for (const bc of barcodes) {
               const value = (bc.rawValue || "").trim();
-              if (value) addImei(value);
+              if (value) { addImei(value); lastDetectedAt = Date.now(); }
             }
           }
         }
         scanErrCount = 0;
+
+        // Auto-switch if no detection for 8s
+        if (!switchedToZXing && Date.now() - lastDetectedAt > 8000 && _bulkScanState.scanned.length === 0) {
+          switchToZXing();
+          return;
+        }
       } catch (e) {
         scanErrCount++;
         if (scanErrCount === 1) console.warn("Detector error (will retry):", e);
@@ -11943,21 +11984,53 @@ async function initFallbackBulkScanner(addImei, setStatus) {
       await _bulkScanState.scanner.start(
         { facingMode: "environment" },
         {
-          fps: 20,
-          qrbox: (vw, vh) => ({ width: Math.min(vw * 0.9, 320), height: Math.min(vh * 0.45, 140) }),
+          fps: 15,
+          // v3.9.16 — Larger scan box (95% width, 60% height) so PT06-style
+          // small barcodes positioned anywhere in viewfinder still detect.
+          // Turn OFF useBarCodeDetectorIfSupported so we actually use ZXing
+          // (the point of the "stronger scanner").
+          qrbox: (vw, vh) => ({
+            width:  Math.min(vw * 0.95, 500),
+            height: Math.min(vh * 0.60, 220),
+          }),
           formatsToSupport: allFormats,
-          experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+          experimentalFeatures: { useBarCodeDetectorIfSupported: false },
           videoConstraints: {
             facingMode: "environment",
-            width: { ideal: 1920, min: 640 },
-            height: { ideal: 1080, min: 480 },
+            width: { ideal: 1920, min: 1280 },
+            height: { ideal: 1080, min: 720 },
             focusMode: "continuous",
           },
         },
         (decodedText) => addImei(decodedText),
         () => {}
       );
-      setStatus("📷 Ready — point camera at barcode");
+      setStatus("🔬 Stronger scanner ready — point at barcode");
+
+      // Try to apply torch via html5-qrcode's advanced controls
+      try {
+        const track = _bulkScanState.scanner.getRunningTrackCameraCapabilities?.();
+        const stream = _bulkScanState.scanner._stream || _bulkScanState.scanner._element?.srcObject;
+        if (stream) {
+          const videoTrack = stream.getVideoTracks?.()[0];
+          if (videoTrack) {
+            const caps = videoTrack.getCapabilities?.() || {};
+            if (caps.torch) {
+              const torchBtn = document.getElementById("bulkTorchBtn");
+              if (torchBtn) {
+                let torchOn = false;
+                torchBtn.onclick = async () => {
+                  torchOn = !torchOn;
+                  try {
+                    await videoTrack.applyConstraints({ advanced: [{ torch: torchOn }] });
+                    torchBtn.classList.toggle("active", torchOn);
+                  } catch {}
+                };
+              }
+            }
+          }
+        }
+      } catch {}
     } catch (err) {
       console.warn("Fallback scanner failed:", err);
       setStatus("Camera unavailable — type manually below.");
