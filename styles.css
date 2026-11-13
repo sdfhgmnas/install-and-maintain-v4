@@ -11835,7 +11835,8 @@ button.clickable-card:focus-visible {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
-.qr-icon-btn#singleTorchBtn.active {
+.qr-icon-btn#singleTorchBtn.active,
+.qr-icon-btn#bulkTorchBtn.active {
   background: #fbbf24;
   color: #78350f;
   box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.3);
