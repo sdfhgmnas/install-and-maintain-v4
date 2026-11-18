@@ -1983,6 +1983,11 @@ async function initNativeSingleScanner(onDetect, setStatus, captureStream, isAct
     setStatus("📷 Scanner ready — tap to focus, point at barcode");
 
     const track = stream.getVideoTracks()[0];
+    // v3.9.16 — Diagnostic: log actual resolution received
+    try {
+      const s = track.getSettings?.();
+      if (s) console.log(`[Scanner] Camera: ${s.width}×${s.height} @ ${s.frameRate}fps, facing: ${s.facingMode}`);
+    } catch {}
 
     // ===== Tap-to-focus (yellow ring) =====
     const viewfinder = document.querySelector(".bulk-scan-viewfinder");
@@ -2102,10 +2107,13 @@ async function initNativeSingleScanner(onDetect, setStatus, captureStream, isAct
           }
         }
         scanErrCount = 0;
-        // Auto-switch to ZXing after 8s no detection
+        // v3.9.16 — Hint (not auto-switch) after 8s: user can tap 🔬 if needed
         if (!switchedToZXing && Date.now() - scanStartedAt > 8000) {
-          switchToZXing();
-          return;
+          const statusEl = document.getElementById("qrStatus");
+          if (statusEl && !statusEl.dataset.hintShown) {
+            statusEl.dataset.hintShown = "1";
+            setStatus("📷 Scanner ready — tap 🔬 for stronger scan if needed");
+          }
         }
       } catch (e) {
         scanErrCount++;
@@ -2134,13 +2142,17 @@ async function initFallbackSingleScanner(onDetect, setStatus) {
     HQRFormats.EAN_13, HQRFormats.QR_CODE, HQRFormats.DATA_MATRIX,
   ] : undefined;
 
+  // v3.9.16 — Properly size + hide native video, show ZXing div in its place
   const video = document.getElementById("singleScanVideo");
-  if (video) video.style.display = "none";
+  if (video) {
+    try { video.srcObject = null; } catch {}
+    video.style.display = "none";
+  }
   const wrap = document.querySelector(".bulk-scan-viewfinder");
-  if (wrap) {
+  if (wrap && !document.getElementById("singleScanDiv")) {
     const div = document.createElement("div");
     div.id = "singleScanDiv";
-    div.style.width = "100%";
+    div.style.cssText = "position:absolute; inset:0; width:100%; height:100%; background:#000; display:block; overflow:hidden;";
     wrap.insertBefore(div, wrap.firstChild);
   }
 
@@ -11965,10 +11977,13 @@ async function initNativeBulkScanner(addImei, setStatus, cleanup) {
           }
         }
         scanErrCount = 0;
-        // Auto-switch if nothing detected after 8s AND nothing scanned yet
+        // v3.9.16 — Hint (not auto-switch) after 8s: user can tap 🔬 if needed
         if (!switchedToZXing && Date.now() - scanStartedAt > 8000 && _bulkScanState.scanned.length === 0) {
-          switchToZXing();
-          return;
+          const statusEl = document.getElementById("qrStatus");
+          if (statusEl && !statusEl.dataset.hintShown) {
+            statusEl.dataset.hintShown = "1";
+            setStatus("📷 Scanner ready — tap 🔬 for stronger scan if needed");
+          }
         }
       } catch (e) {
         scanErrCount++;
@@ -12002,16 +12017,17 @@ async function initFallbackBulkScanner(addImei, setStatus) {
 
   setTimeout(async () => {
     try {
-      // Use the video element directly for html5-qrcode... actually it needs its own div
-      // Replace video with a div for html5-qrcode
+      // v3.9.16 — Properly size + hide native video, show ZXing div in its place
       const wrap = document.querySelector(".bulk-scan-viewfinder");
-      if (wrap) {
+      if (wrap && !document.getElementById("qrReader")) {
         const video = document.getElementById("bulkScanVideo");
-        if (video) video.style.display = "none";
+        if (video) {
+          try { video.srcObject = null; } catch {}
+          video.style.display = "none";
+        }
         const div = document.createElement("div");
         div.id = "qrReader";
-        div.style.width = "100%";
-        div.style.height = "100%";
+        div.style.cssText = "position:absolute; inset:0; width:100%; height:100%; background:#000; display:block; overflow:hidden;";
         wrap.insertBefore(div, wrap.firstChild);
       }
       _bulkScanState.scanner = new HQR("qrReader", { verbose: false });
