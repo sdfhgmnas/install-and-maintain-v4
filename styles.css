@@ -11845,3 +11845,23 @@ button.clickable-card:focus-visible {
   background: #0891b2;
   color: #fff;
 }
+
+/* v3.9.16 — Ensure ZXing (html5-qrcode) fills viewfinder */
+#singleScanDiv,
+#qrReader {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+#singleScanDiv video,
+#qrReader video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+}
+#singleScanDiv canvas,
+#qrReader canvas {
+  width: 100% !important;
+  height: auto !important;
+}
