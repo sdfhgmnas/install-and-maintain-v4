@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.9.16";
+const APP_VERSION = "3.9.20";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -268,6 +268,208 @@ async function consumeStockFor(identifiers, link) {
     }
   }
   return { consumed };
+}
+
+/* ============================================================
+   ensureSimInStock — v3.9.18
+   ------------------------------------------------------------
+   Agar Akash installation ke time ek SIM ICCID enter kare jo
+   stock me nahi hai, to yaha hum automatic ek SIM stock item
+   bana dete hain (quantity 1, category "SIM-Auto") taaki phir
+   consumeStockFor() use consume kar sake.
+
+   Admin baad me stock page se iska category/name correct kar
+   sakta hai (needsReview flag lagi rehti hai).
+   ============================================================ */
+
+async function ensureSimInStock(iccid, context = {}) {
+  if (!stockItemsTableReady || !iccid) return null;
+  const v = String(iccid).trim().toLowerCase();
+  if (!v) return null;
+
+  // Already in stock as a SIM? → don't create a duplicate.
+  const existing = loadStockItems().find((it) => {
+    if (categoryKind(it.category) !== "sim") return false;
+    const m = it.metadata || {};
+    return (
+      (m.secondary || "").toLowerCase() === v ||
+      (m.primary || "").toLowerCase() === v ||
+      (m.imei || "").toLowerCase() === v
+    );
+  });
+  if (existing) return existing;
+
+  // Pick a reasonable default SIM category — reuse the first SIM-kind
+  // category we can find, else fall back to "SIM-Auto".
+  let category = "SIM-Auto";
+  const existingSim = loadStockItems().find((it) => categoryKind(it.category) === "sim");
+  if (existingSim?.category) category = existingSim.category;
+
+  const vehicleTag = context.vehicleNo ? ` — ${context.vehicleNo}` : "";
+  const payload = {
+    name: `SIM (Auto-added${vehicleTag}) — ${String(iccid).slice(-6)}`,
+    category,
+    unit: "pcs",
+    quantity: 1,
+    costPerUnit: null,
+    lowStockThreshold: null,
+    notes: `Auto-added during installation${vehicleTag}. Please review and update name/category.`,
+    supplier: null,
+    metadata: {
+      secondary: String(iccid).trim(),
+      autoAdded: true,
+      needsReview: true,
+      addedFromInstall: context.vehicleNo || null,
+      addedAt: new Date().toISOString(),
+    },
+  };
+
+  try {
+    const saved = await insertStockItem(payload);
+    // Push directly into the local cache so consumeStockFor() (which reads
+    // from loadStockItems()) finds it in the same turn, without waiting for
+    // the next refreshAllData() cycle.
+    if (saved && Array.isArray(stockItems)) {
+      stockItems.push(saved);
+    }
+    return saved;
+  } catch (err) {
+    console.warn("ensureSimInStock failed:", err);
+    return null;
+  }
+}
+
+/* ============================================================
+   ensureGpsInStock — v3.9.19
+   ------------------------------------------------------------
+   Agar installation me enter kiya hua IMEI stock me nahi hai,
+   to yaha automatic ek GPS stock item create ho jaata hai
+   (quantity 1, needsReview flag). Fir consumeStockFor() use
+   consume kar leta hai.
+   ============================================================ */
+
+async function ensureGpsInStock(imei, { gpsType, vehicleNo } = {}) {
+  if (!stockItemsTableReady || !imei) return null;
+  const v = String(imei).trim().toLowerCase();
+  if (!v) return null;
+
+  // Already in stock as GPS? → don't duplicate.
+  const existing = loadStockItems().find((it) => {
+    if (categoryKind(it.category) !== "gps") return false;
+    return (it.metadata?.imei || "").toLowerCase() === v;
+  });
+  if (existing) return existing;
+
+  // Pick a category — prefer one matching the given gpsType, else first
+  // existing GPS category, else fall back to a typed "GPS-Auto" string.
+  let category = null;
+  const typeUpper = String(gpsType || "").toUpperCase();
+  if (typeUpper) {
+    const match = loadStockItems().find((it) => {
+      if (categoryKind(it.category) !== "gps") return false;
+      const c = String(it.category || "").toUpperCase();
+      if (typeUpper === "FMB") return c.includes("FMB");
+      if (typeUpper === "FMC") return c.includes("FMC");
+      if (typeUpper === "NORMAL") return c.includes("NORMAL") || c.includes("PT06") || c.includes("PT-06");
+      return false;
+    });
+    if (match?.category) category = match.category;
+  }
+  if (!category) {
+    const anyGps = loadStockItems().find((it) => categoryKind(it.category) === "gps");
+    if (anyGps?.category) category = anyGps.category;
+  }
+  if (!category) category = gpsType ? `GPS - ${gpsType} (Auto)` : "GPS-Auto";
+
+  const vehicleTag = vehicleNo ? ` — ${vehicleNo}` : "";
+  const payload = {
+    name: `GPS (Auto-added${vehicleTag}) — ${String(imei).slice(-6)}`,
+    category,
+    unit: "pcs",
+    quantity: 1,
+    costPerUnit: null,
+    lowStockThreshold: null,
+    notes: `Auto-added during installation${vehicleTag}. Please review name/category.`,
+    supplier: null,
+    metadata: {
+      imei: String(imei).trim(),
+      autoAdded: true,
+      needsReview: true,
+      addedFromInstall: vehicleNo || null,
+      addedAt: new Date().toISOString(),
+    },
+  };
+
+  try {
+    const saved = await insertStockItem(payload);
+    if (saved && Array.isArray(stockItems)) stockItems.push(saved);
+    return saved;
+  } catch (err) {
+    console.warn("ensureGpsInStock failed:", err);
+    return null;
+  }
+}
+
+/* ============================================================
+   ensureSensorInStock — v3.9.19
+   ------------------------------------------------------------
+   Agar enter kiya hua sensor (sensorNo + macId) stock me nahi
+   hai, to yaha auto-create. Match sensorNo OR macId pe hota
+   hai (jo bhi stock me aata hai).
+   ============================================================ */
+
+async function ensureSensorInStock(sensorNo, macId, { vehicleNo } = {}) {
+  if (!stockItemsTableReady) return null;
+  if (!sensorNo && !macId) return null;
+
+  const sN = String(sensorNo || "").trim().toLowerCase();
+  const mN = String(macId || "").trim().toLowerCase();
+
+  // Already in stock? → don't duplicate.
+  const existing = loadStockItems().find((it) => {
+    if (categoryKind(it.category) !== "sensor") return false;
+    const m = it.metadata || {};
+    return (
+      (sN && (m.sensorNo || "").toLowerCase() === sN) ||
+      (mN && (m.macId || "").toLowerCase() === mN)
+    );
+  });
+  if (existing) return existing;
+
+  // Pick a category — reuse existing sensor category, else "Sensor-Auto".
+  let category = "Sensor-Auto";
+  const existingSensor = loadStockItems().find((it) => categoryKind(it.category) === "sensor");
+  if (existingSensor?.category) category = existingSensor.category;
+
+  const vehicleTag = vehicleNo ? ` — ${vehicleNo}` : "";
+  const nameTail = sensorNo || macId || "unknown";
+  const payload = {
+    name: `Sensor (Auto-added${vehicleTag}) — ${String(nameTail).slice(-6)}`,
+    category,
+    unit: "pcs",
+    quantity: 1,
+    costPerUnit: null,
+    lowStockThreshold: null,
+    notes: `Auto-added during installation${vehicleTag}. Please review name/category.`,
+    supplier: null,
+    metadata: {
+      sensorNo: String(sensorNo || "").trim(),
+      macId: String(macId || "").trim().toUpperCase(),
+      autoAdded: true,
+      needsReview: true,
+      addedFromInstall: vehicleNo || null,
+      addedAt: new Date().toISOString(),
+    },
+  };
+
+  try {
+    const saved = await insertStockItem(payload);
+    if (saved && Array.isArray(stockItems)) stockItems.push(saved);
+    return saved;
+  } catch (err) {
+    console.warn("ensureSensorInStock failed:", err);
+    return null;
+  }
 }
 
 /**
@@ -1711,6 +1913,45 @@ async function prewarmCamera() {
   }
 }
 
+/**
+ * v3.9.17 — Parse esensors.pro sensor QR codes.
+ * Example scanned value:
+ *   https://doc.esensors.pro/m/124?s=122178&d=26.08&m=CD:64:13:90:B2:4B&//608263122178
+ * Returns: { sensorNo: "122178", macId: "CD:64:13:90:B2:4B", raw: ... }
+ * If scanned value isn't an esensors URL, returns empty — caller handles manual.
+ */
+function parseSensorQR(value) {
+  const out = { sensorNo: "", macId: "", raw: value };
+  if (!value) return out;
+  const v = String(value).trim();
+
+  // Try full URL parse first
+  try {
+    if (v.includes("esensors") || v.startsWith("http") || v.includes("?")) {
+      // Extract query string portion
+      const qIdx = v.indexOf("?");
+      const query = qIdx >= 0 ? v.slice(qIdx + 1) : v;
+      const params = new URLSearchParams(query.replace(/&\/\/.*$/, "")); // trim trailing //serial
+      const s = params.get("s");
+      const m = params.get("m");
+      if (s) out.sensorNo = s.trim();
+      if (m) out.macId = m.trim().toUpperCase();
+    }
+  } catch {}
+
+  // Fallback regex (in case URLSearchParams fails on weird formats)
+  if (!out.sensorNo) {
+    const sm = v.match(/[?&]s=([^&\s]+)/i);
+    if (sm) out.sensorNo = sm[1].trim();
+  }
+  if (!out.macId) {
+    const mm = v.match(/[?&]m=([0-9A-F:]{12,17})/i);
+    if (mm) out.macId = mm[1].trim().toUpperCase();
+  }
+
+  return out;
+}
+
 async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Point camera at the barcode or QR code.", onScan, codeType = "any", checkDuplicates = false, dupCheckScope = "all" }) {
   // Use the SAME proven native BarcodeDetector setup as the bulk scanner
   // (Abhinav's workflow). Now includes ALL Abhinav features:
@@ -1944,33 +2185,58 @@ async function initNativeSingleScanner(onDetect, setStatus, captureStream, isAct
 
     setStatus("Requesting camera permission…");
 
-    // v3.9.16 — Try HD first for small barcodes (PT06 etc.), silently
-    // fall back to original behavior if HD fails on older phones.
+    // v3.9.20 — Try HD first for small barcodes (PT06 etc.), silently
+    // fall back. All constraints use `ideal` only (never `exact` or `min`)
+    // so cheap/older phones can downgrade instead of failing outright.
     const HI_RES = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+    const MED_RES = { width: { ideal: 1280 }, height: { ideal: 720 } };
+    let lastGumError = null;
     const tryGUM = async (c) => {
-      try { return await navigator.mediaDevices.getUserMedia(c); } catch { return null; }
+      try { return await navigator.mediaDevices.getUserMedia(c); }
+      catch (e) { lastGumError = e; return null; }
     };
 
     let stream = null;
+    // Pass 1: HD with back camera (ideal)
     stream = await tryGUM({ video: { facingMode: { ideal: "environment" }, ...HI_RES }, audio: false });
+    // Pass 2: Medium res with back camera (ideal) — safer for mid-tier phones
+    if (!stream) stream = await tryGUM({ video: { facingMode: { ideal: "environment" }, ...MED_RES }, audio: false });
+    // Pass 3: Back camera any resolution
     if (!stream) stream = await tryGUM({ video: { facingMode: { ideal: "environment" } }, audio: false });
-    if (!stream) stream = await tryGUM({ video: { facingMode: { exact: "environment" }, ...HI_RES }, audio: false });
-    if (!stream) stream = await tryGUM({ video: { facingMode: { exact: "environment" } }, audio: false });
+    // Pass 4: Try enumerating devices to find back camera explicitly
     if (!stream) {
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
         const cams = devices.filter((d) => d.kind === "videoinput");
         const back = cams.find((c) => /back|rear|environment|world|wide(?!.*front)/i.test(c.label || ""));
         if (back) {
-          stream = await tryGUM({ video: { deviceId: { exact: back.deviceId }, ...HI_RES }, audio: false });
+          stream = await tryGUM({ video: { deviceId: { exact: back.deviceId }, ...MED_RES }, audio: false });
           if (!stream) stream = await tryGUM({ video: { deviceId: { exact: back.deviceId } }, audio: false });
         }
       } catch {}
     }
+    // Pass 5: Any camera as absolute last resort
     if (!stream) stream = await tryGUM({ video: true, audio: false });
 
     if (!stream) {
-      setStatus("❌ Camera permission denied or unavailable");
+      // Surface the actual error so Akash knows what went wrong
+      const errName = lastGumError?.name || "unknown";
+      let msg = "❌ Camera open nahi ho payi";
+      if (errName === "NotAllowedError" || errName === "PermissionDeniedError") {
+        msg = "❌ Camera permission denied — browser settings me allow karo";
+      } else if (errName === "NotFoundError" || errName === "DevicesNotFoundError") {
+        msg = "❌ Camera nahi mili — phone me camera check karo";
+      } else if (errName === "NotReadableError" || errName === "TrackStartError") {
+        msg = "❌ Camera busy — koi aur app use kar rahi hai";
+      } else if (errName === "OverconstrainedError") {
+        msg = "❌ Camera constraints fail — type manually below";
+      } else if (errName === "SecurityError") {
+        msg = "❌ HTTPS required — URL check karo";
+      }
+      setStatus(msg + " — type manually below");
+      console.error("[Scanner] getUserMedia failed:", lastGumError);
+      // Try fallback scanner as a last resort
+      try { await initFallbackSingleScanner(onDetect, setStatus); } catch {}
       return;
     }
 
@@ -2107,19 +2373,29 @@ async function initNativeSingleScanner(onDetect, setStatus, captureStream, isAct
           }
         }
         scanErrCount = 0;
-        // v3.9.16 — Hint (not auto-switch) after 8s: user can tap 🔬 if needed
-        if (!switchedToZXing && Date.now() - scanStartedAt > 8000) {
+        // v3.9.20 — After 6s, hint to try stronger engine; after 12s auto-switch
+        const elapsed = Date.now() - scanStartedAt;
+        if (!switchedToZXing && elapsed > 6000) {
           const statusEl = document.getElementById("qrStatus");
           if (statusEl && !statusEl.dataset.hintShown) {
             statusEl.dataset.hintShown = "1";
-            setStatus("📷 Scanner ready — tap 🔬 for stronger scan if needed");
+            setStatus("Scan nahi ho raha? 🔬 button dabao (stronger scanner) ya neeche type karo");
+          }
+        }
+        if (!switchedToZXing && elapsed > 12000) {
+          const statusEl = document.getElementById("qrStatus");
+          if (statusEl && !statusEl.dataset.autoSwitched) {
+            statusEl.dataset.autoSwitched = "1";
+            console.log("[Scanner] Native scanner slow, auto-switching to ZXing");
+            switchToZXing();
           }
         }
       } catch (e) {
         scanErrCount++;
         if (scanErrCount === 1) console.warn("Detector error:", e);
         if (scanErrCount > 30) {
-          setStatus("Scanner having trouble — type manually below");
+          console.log("[Scanner] Too many detector errors, switching to ZXing");
+          switchToZXing();
           return;
         }
       }
@@ -2135,26 +2411,37 @@ async function initNativeSingleScanner(onDetect, setStatus, captureStream, isAct
 /* Fallback for browsers without BarcodeDetector */
 async function initFallbackSingleScanner(onDetect, setStatus) {
   const HQR = window.Html5Qrcode;
-  if (!HQR) { setStatus("Scanner unavailable — type manually below."); return; }
+  if (!HQR) {
+    console.error("[Scanner] Html5Qrcode library not loaded");
+    setStatus("❌ Scanner library load nahi hui — page refresh karo ya neeche type karo");
+    return;
+  }
   const HQRFormats = window.Html5QrcodeSupportedFormats;
   const allFormats = HQRFormats ? [
     HQRFormats.CODE_128, HQRFormats.CODE_39, HQRFormats.CODE_93,
     HQRFormats.EAN_13, HQRFormats.QR_CODE, HQRFormats.DATA_MATRIX,
   ] : undefined;
 
-  // v3.9.16 — Properly size + hide native video, show ZXing div in its place
+  // v3.9.20 — Properly hide native video, remove any stale ZXing div, create fresh
   const video = document.getElementById("singleScanVideo");
   if (video) {
     try { video.srcObject = null; } catch {}
     video.style.display = "none";
   }
+  // Remove stale ZXing div from previous invocation
+  const staleDiv = document.getElementById("singleScanDiv");
+  if (staleDiv) staleDiv.remove();
+
   const wrap = document.querySelector(".bulk-scan-viewfinder");
-  if (wrap && !document.getElementById("singleScanDiv")) {
-    const div = document.createElement("div");
-    div.id = "singleScanDiv";
-    div.style.cssText = "position:absolute; inset:0; width:100%; height:100%; background:#000; display:block; overflow:hidden;";
-    wrap.insertBefore(div, wrap.firstChild);
+  if (!wrap) {
+    console.error("[Scanner] .bulk-scan-viewfinder not found in DOM");
+    setStatus("❌ Scanner DOM broken — neeche type karo");
+    return;
   }
+  const div = document.createElement("div");
+  div.id = "singleScanDiv";
+  div.style.cssText = "position:absolute; inset:0; width:100%; height:100%; background:#000; display:block; overflow:hidden; z-index:1;";
+  wrap.insertBefore(div, wrap.firstChild);
 
   setTimeout(async () => {
     try {
@@ -2163,17 +2450,18 @@ async function initFallbackSingleScanner(onDetect, setStatus) {
         { facingMode: "environment" },
         {
           fps: 15,
-          // v3.9.16 — Larger scan box so small barcodes anywhere detect
           qrbox: (vw, vh) => ({
             width:  Math.min(vw * 0.95, 500),
             height: Math.min(vh * 0.60, 220),
           }),
           formatsToSupport: allFormats,
           experimentalFeatures: { useBarCodeDetectorIfSupported: false },
+          // v3.9.20 — All constraints use `ideal` (not `min`) so older phones
+          // can still open the camera at whatever resolution they support.
           videoConstraints: {
             facingMode: "environment",
-            width: { ideal: 1920, min: 1280 },
-            height: { ideal: 1080, min: 720 },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
             focusMode: "continuous",
           },
         },
@@ -2186,35 +2474,65 @@ async function initFallbackSingleScanner(onDetect, setStatus) {
       );
       setStatus("🔬 Stronger scanner ready — point at barcode");
 
-      // Wire torch button after start — ZXing scanner creates its own video
+      // Wire torch + zoom after start — ZXing scanner creates its own video
       setTimeout(() => {
         try {
           const vid = document.querySelector("#singleScanDiv video");
           const vidStream = vid?.srcObject;
           const vidTrack = vidStream?.getVideoTracks?.()[0];
-          if (vidTrack) {
-            const caps = vidTrack.getCapabilities?.() || {};
-            const torchBtn = document.getElementById("singleTorchBtn");
-            if (torchBtn) {
-              let torchOn = false;
-              torchBtn.onclick = async () => {
-                if (!caps.torch) {
-                  showToast("Phone doesn't expose torch control to browser.", true);
-                  return;
-                }
-                torchOn = !torchOn;
-                try {
-                  await vidTrack.applyConstraints({ advanced: [{ torch: torchOn }] });
-                  torchBtn.classList.toggle("active", torchOn);
-                } catch { showToast("Couldn't toggle torch.", true); }
+          if (!vidTrack) return;
+          const caps = vidTrack.getCapabilities?.() || {};
+          try {
+            const s = vidTrack.getSettings?.();
+            if (s) console.log(`[Scanner/ZXing] Camera: ${s.width}×${s.height} @ ${s.frameRate}fps`);
+          } catch {}
+
+          // Torch
+          const torchBtn = document.getElementById("singleTorchBtn");
+          if (torchBtn) {
+            let torchOn = false;
+            torchBtn.onclick = async () => {
+              if (!caps.torch) {
+                showToast("Phone doesn't expose torch control to browser.", true);
+                return;
+              }
+              torchOn = !torchOn;
+              try {
+                await vidTrack.applyConstraints({ advanced: [{ torch: torchOn }] });
+                torchBtn.classList.toggle("active", torchOn);
+              } catch { showToast("Couldn't toggle torch.", true); }
+            };
+          }
+
+          // Zoom (same as native scanner)
+          if (caps.zoom) {
+            const zoomWrap   = document.getElementById("singleZoomWrap");
+            const zoomSlider = document.getElementById("singleZoomSlider");
+            const zoomVal    = document.getElementById("singleZoomVal");
+            if (zoomWrap && zoomSlider && zoomVal) {
+              const zMin = caps.zoom.min || 1;
+              const zMax = Math.min(caps.zoom.max || 5, 5);
+              const defaultZ = Math.min(Math.max(2.0, zMin), zMax);
+              zoomSlider.min  = zMin;
+              zoomSlider.max  = zMax;
+              zoomSlider.step = caps.zoom.step || 0.1;
+              zoomSlider.value = defaultZ;
+              zoomVal.textContent = `${defaultZ.toFixed(1)}×`;
+              zoomWrap.style.display = "flex";
+              try { vidTrack.applyConstraints({ advanced: [{ zoom: defaultZ }] }); } catch {}
+              zoomSlider.oninput = async () => {
+                const z = parseFloat(zoomSlider.value);
+                zoomVal.textContent = `${z.toFixed(1)}×`;
+                try { await vidTrack.applyConstraints({ advanced: [{ zoom: z }] }); } catch {}
               };
             }
           }
-        } catch {}
+        } catch (e) { console.warn("[Scanner/ZXing] post-start wiring failed:", e); }
       }, 500);
     } catch (e) {
-      console.error("Fallback scanner failed:", e);
-      setStatus("❌ Scanner failed — type manually below");
+      console.error("[Scanner/ZXing] start failed:", e);
+      const msg = e?.message || e?.name || "unknown";
+      setStatus(`❌ Stronger scanner fail: ${msg.slice(0, 60)} — neeche type karo`);
     }
   }, 100);
 }
@@ -3657,9 +3975,15 @@ function renderAkashHome() {
 function openAkashEditInstallation(installId) {
   const inst = loadInstallations().find((i) => i.id === installId);
   if (!inst) return;
+
+  const curImei = getCurrentImei(inst) || "";
+  const activeSim = (inst.simHistory || []).find((h) => h.active) || (inst.simHistory || [])[inst.simHistory?.length - 1] || {};
+  const curPrimary = activeSim.value || "";
+  const curSecondary = inst.secondarySim || activeSim.secondaryValue || "";
+
   modal.innerHTML = `
     <h3>✎ Edit installation</h3>
-    <p class="modal-desc">You can fix typos in vehicle no, GPS model, MAC ID and sensor number. <strong>IMEI and SIM cannot be edited here</strong> — if you typed the wrong device or SIM, delete this entry and create a new one so stock is corrected automatically.</p>
+    <p class="modal-desc">Agar GPS / SIM / sensor kaam nahi kar raha to yaha change kar sakte ho. Old item stock me wapas chala jaayega, new item stock se minus ho jaayega.</p>
     <div class="field">
       <label for="aiVehicle">Vehicle number</label>
       <input type="text" id="aiVehicle" value="${escapeHtml(inst.vehicleNo)}" autocomplete="off" />
@@ -3668,6 +3992,28 @@ function openAkashEditInstallation(installId) {
       <label for="aiModel">GPS model</label>
       <input type="text" id="aiModel" value="${escapeHtml(inst.gpsModel)}" autocomplete="off" />
     </div>
+    <div class="field">
+      <label for="aiImei">IMEI</label>
+      <div class="input-with-scan">
+        <input type="text" id="aiImei" value="${escapeHtml(curImei)}" inputmode="numeric" autocomplete="off" class="mono" />
+        <button type="button" class="scan-btn" id="aiScanImei" aria-label="Scan IMEI">📷</button>
+      </div>
+      <small class="field-hint" id="aiImeiHint"></small>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="aiSecondarySim">Secondary No (ICCID)</label>
+        <div class="input-with-scan">
+          <input type="text" id="aiSecondarySim" value="${escapeHtml(curSecondary)}" inputmode="numeric" autocomplete="off" class="mono" />
+          <button type="button" class="scan-btn" id="aiScanSim" aria-label="Scan SIM">📷</button>
+        </div>
+        <small class="field-hint" id="aiSimHint"></small>
+      </div>
+      <div class="field">
+        <label for="aiPrimarySim">Primary No (Mobile)</label>
+        <input type="text" id="aiPrimarySim" value="${escapeHtml(curPrimary)}" inputmode="numeric" autocomplete="off" class="mono" />
+      </div>
+    </div>
     <div class="field-row">
       <div class="field">
         <label for="aiMac">MAC ID</label>
@@ -3675,17 +4021,19 @@ function openAkashEditInstallation(installId) {
       </div>
       <div class="field">
         <label for="aiSensor">Sensor number</label>
-        <input type="text" id="aiSensor" value="${escapeHtml(inst.sensorNo || "")}" autocomplete="off" class="mono" />
+        <div class="input-with-scan">
+          <input type="text" id="aiSensor" value="${escapeHtml(inst.sensorNo || "")}" autocomplete="off" class="mono" />
+          <button type="button" class="scan-btn" id="aiScanSensor" aria-label="Scan sensor QR">📷</button>
+        </div>
       </div>
     </div>
-    <div class="field">
-      <label>IMEI (read-only)</label>
-      <input type="text" value="${escapeHtml(getCurrentImei(inst) || "")}" readonly class="mono" />
-    </div>
-    <div class="field">
-      <label>SIM (read-only)</label>
-      <input type="text" value="${escapeHtml(getCurrentSim(inst) || "")}" readonly class="mono" />
-    </div>
+    <label class="stock-restore-toggle">
+      <input type="checkbox" id="aiRestoreStock" checked />
+      <span class="stock-restore-text">
+        <strong>↻ Restore old + consume new stock</strong>
+        <small>Agar IMEI / SIM / Sensor change ho to purana wapas stock me (+1) aur naya consume (−1) ho jaayega. Default: ON.</small>
+      </span>
+    </label>
     <div class="modal-actions">
       <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
       <button type="button" class="btn btn-primary" data-act="save">Save changes</button>
@@ -3696,28 +4044,262 @@ function openAkashEditInstallation(installId) {
     if (e.target === modalOverlay) closeModal();
   };
   modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+
+  // v3.9.18 — Scan handlers in Akash edit modal
+  modal.querySelector('#aiScanImei')?.addEventListener('click', () => {
+    openBarcodeScannerModal({
+      title: "📷 Scan new IMEI",
+      hint: "Naya GPS device scan karo (purana fail hua to).",
+      codeType: "imei",
+      onScan: (val) => {
+        const cleaned = val.replace(/\D/g, "") || val.trim();
+        modal.querySelector("#aiImei").value = cleaned;
+        const matched = findStockByValue(cleaned);
+        const gpsMatch = matched.find((it) => categoryKind(it.category) === "gps");
+        const hint = modal.querySelector("#aiImeiHint");
+        if (gpsMatch) {
+          if (hint) hint.innerHTML = `<span class="hint-found">✓ Stock me mila: ${escapeHtml(gpsMatch.name)} · Qty ${gpsMatch.quantity}</span>`;
+          showToast(`✓ Stock me mila: ${gpsMatch.name}`);
+        } else {
+          if (hint) hint.textContent = `ℹ️ Stock me nahi mila.`;
+          showToast(`IMEI scanned: ${cleaned} — stock me nahi`);
+        }
+      },
+    });
+  });
+
+  modal.querySelector('#aiScanSim')?.addEventListener('click', () => {
+    openBarcodeScannerModal({
+      title: "📷 Scan new SIM",
+      hint: "Nayi SIM scan karo (purani fail hui to).",
+      codeType: "iccid",
+      onScan: (val) => {
+        const cleaned = val.replace(/\D/g, "") || val.trim();
+        modal.querySelector("#aiSecondarySim").value = cleaned;
+        const matched = findStockByValue(cleaned);
+        const simMatch = matched.find((it) => categoryKind(it.category) === "sim");
+        const hint = modal.querySelector("#aiSimHint");
+        if (simMatch) {
+          if (hint) hint.innerHTML = `<span class="hint-found">✓ Stock me mila: ${escapeHtml(simMatch.name)} · Qty ${simMatch.quantity}</span>`;
+          showToast(`✓ Stock me mila: ${simMatch.name}`);
+        } else {
+          if (hint) hint.textContent = `ℹ️ Stock me nahi — save karte waqt auto-add ho jaayegi.`;
+          showToast(`ICCID scanned — stock me nahi`);
+        }
+      },
+    });
+  });
+
+  // v3.9.17 — Scan sensor QR → auto-fill Sensor + MAC in edit modal
+  modal.querySelector('#aiScanSensor')?.addEventListener('click', () => {
+    openBarcodeScannerModal({
+      title: "📷 Scan Sensor QR",
+      hint: "Sensor pe laga QR code scan karo.",
+      codeType: "any",
+      onScan: (val) => {
+        const parsed = parseSensorQR(val);
+        if (!parsed.sensorNo && !parsed.macId) {
+          showToast("Ye sensor QR nahi lag raha.", true);
+          return;
+        }
+        const msgs = [];
+        if (parsed.sensorNo) { modal.querySelector("#aiSensor").value = parsed.sensorNo; msgs.push(`Sensor: ${parsed.sensorNo}`); }
+        if (parsed.macId)    { modal.querySelector("#aiMac").value    = parsed.macId;    msgs.push(`MAC: ${parsed.macId}`); }
+        showToast(`✓ ${msgs.join(" · ")}`);
+      },
+    });
+  });
+
   modal.querySelector('[data-act="save"]').onclick = async () => {
     const vehicleNo = modal.querySelector("#aiVehicle").value.trim();
     const gpsModel = modal.querySelector("#aiModel").value.trim();
     const macId = modal.querySelector("#aiMac").value.trim();
     const sensorNo = modal.querySelector("#aiSensor").value.trim();
+    const newImei = modal.querySelector("#aiImei").value.trim();
+    const newSecondary = modal.querySelector("#aiSecondarySim").value.trim();
+    const newPrimary = modal.querySelector("#aiPrimarySim").value.trim();
+    const restoreStock = modal.querySelector("#aiRestoreStock").checked;
+
     if (!vehicleNo) {
       showToast("Vehicle number cannot be empty.", true);
       return;
     }
+
+    // Detect what changed — so we can restore old & consume new
+    const imeiChanged      = newImei      && newImei      !== curImei;
+    const secondaryChanged = newSecondary && newSecondary !== curSecondary;
+    const primaryChanged   = newPrimary   && newPrimary   !== curPrimary;
+    const sensorChanged    = (sensorNo    || "") !== (inst.sensorNo || "");
+
     closeModal();
     renderLoading("Saving changes...");
     try {
-      await updateInstallation({ ...inst, vehicleNo, gpsModel, macId, sensorNo });
+      // Build updated installation — preserve histories, mark old inactive if changed
+      const now = new Date().toISOString();
+      const updated = { ...inst, vehicleNo, gpsModel, macId, sensorNo };
+
+      if (imeiChanged) {
+        const imeiHist = [...(inst.imeiHistory || [])];
+        imeiHist.forEach((e) => { if (e.active) e.active = false; });
+        imeiHist.push({ value: newImei, addedAt: now, active: true, addedBy: currentUser || "akash", reason: "Device replaced (edit)" });
+        updated.imeiHistory = imeiHist;
+      }
+      if (primaryChanged || secondaryChanged) {
+        const simHist = [...(inst.simHistory || [])];
+        simHist.forEach((e) => { if (e.active) e.active = false; });
+        simHist.push({
+          value: newPrimary || curPrimary,
+          secondaryValue: newSecondary || curSecondary,
+          addedAt: now,
+          active: true,
+          addedBy: currentUser || "akash",
+          reason: "SIM replaced (edit)",
+        });
+        updated.simHistory = simHist;
+        if (secondaryChanged) updated.secondarySim = newSecondary;
+      }
+
+      await updateInstallation(updated);
+
+      // Stock accounting — restore old, consume new
+      if (restoreStock) {
+        const restorePayload = {};
+        if (imeiChanged && curImei)             restorePayload.imei         = curImei;
+        if (secondaryChanged && curSecondary)   restorePayload.simSecondary = curSecondary;
+        if (primaryChanged && curPrimary)       restorePayload.simPrimary   = curPrimary;
+        if (sensorChanged && inst.sensorNo)     restorePayload.sensorNo     = inst.sensorNo;
+        if (Object.keys(restorePayload).length) {
+          try {
+            await restoreStockByIdentifiers(restorePayload, {
+              installationId: inst.id,
+              vehicleNo,
+              note: "Restored after edit — old item put back",
+            });
+          } catch (e) { console.warn("Restore old stock failed:", e); }
+        }
+
+        // v3.9.19 — Auto-add new GPS / SIM / Sensor to stock if not already there
+        if (imeiChanged && newImei) {
+          await ensureGpsInStock(newImei, { gpsType: gpsModel, vehicleNo });
+        }
+        if (secondaryChanged && newSecondary) {
+          await ensureSimInStock(newSecondary, { vehicleNo });
+        }
+        if (sensorChanged && (sensorNo || macId)) {
+          await ensureSensorInStock(sensorNo, macId, { vehicleNo });
+        }
+
+        // Consume new
+        const consumePayload = {};
+        if (imeiChanged)      consumePayload.imei         = newImei;
+        if (secondaryChanged) consumePayload.simSecondary = newSecondary;
+        if (primaryChanged)   consumePayload.simPrimary   = newPrimary;
+        if (sensorChanged)    consumePayload.sensorNo     = sensorNo;
+        if (sensorChanged)    consumePayload.macId        = macId;
+        if (Object.keys(consumePayload).length) {
+          await consumeStockFor(consumePayload, {
+            installationId: inst.id,
+            vehicleNo,
+            note: "Consumed after edit — new item used",
+          });
+        }
+      }
+
       await refreshAllData();
       render();
-      showToast("Installation updated.");
+      const changeParts = [];
+      if (imeiChanged) changeParts.push("IMEI");
+      if (secondaryChanged || primaryChanged) changeParts.push("SIM");
+      if (sensorChanged) changeParts.push("Sensor");
+      if (changeParts.length && restoreStock) {
+        showToast(`✓ Updated! ${changeParts.join(", ")} replaced — stock adjusted automatically.`);
+      } else {
+        showToast("Installation updated.");
+      }
     } catch (err) {
       await refreshAllData();
       render();
       showToast(err.message || "Save failed.", true);
     }
   };
+}
+
+/* ============================================================
+   restoreStockByIdentifiers — v3.9.18
+   ------------------------------------------------------------
+   Agar edit me purana IMEI/SIM/Sensor change kiya gaya, to
+   pehle wo values jo stock item me pehle "usedInVehicle" mark
+   hui thi, unki quantity wapas +1 kar do (reverse of consume).
+   ============================================================ */
+
+async function restoreStockByIdentifiers(identifiers, link) {
+  if (!stockItemsTableReady) return { restored: [] };
+  const seen = new Set();
+  const candidates = [];
+  function matchBy(predicate) {
+    for (const it of loadStockItems()) {
+      if (seen.has(it.id)) continue;
+      if (predicate(it)) {
+        candidates.push(it);
+        seen.add(it.id);
+      }
+    }
+  }
+  if (identifiers.imei) {
+    const v = String(identifiers.imei).trim().toLowerCase();
+    matchBy((it) => (it.metadata?.imei || "").toLowerCase() === v);
+  }
+  if (identifiers.simSecondary) {
+    const v = String(identifiers.simSecondary).trim().toLowerCase();
+    matchBy((it) =>
+      (it.metadata?.secondary || "").toLowerCase() === v ||
+      (it.metadata?.primary || "").toLowerCase() === v ||
+      ((categoryKind(it.category) === "sim") && (it.metadata?.imei || "").toLowerCase() === v)
+    );
+  }
+  if (identifiers.simPrimary) {
+    const v = String(identifiers.simPrimary).trim().toLowerCase();
+    matchBy((it) =>
+      (it.metadata?.primary || "").toLowerCase() === v ||
+      (it.metadata?.secondary || "").toLowerCase() === v
+    );
+  }
+  if (identifiers.sensorNo) {
+    const v = String(identifiers.sensorNo).trim().toLowerCase();
+    matchBy((it) => (it.metadata?.sensorNo || "").toLowerCase() === v);
+  }
+
+  const restored = [];
+  for (const it of candidates) {
+    const next = (it.quantity || 0) + 1;
+    try {
+      const newMeta = { ...(it.metadata || {}) };
+      delete newMeta.usedInVehicle;
+      delete newMeta.usedAt;
+      delete newMeta.usedInInstallation;
+      await updateStockItem({ ...it, quantity: next, metadata: newMeta });
+      restored.push({ name: it.name });
+      if (stockTxTableReady) {
+        try {
+          await insertStockTransaction({
+            stockItemId: it.id,
+            installationId: link.installationId || null,
+            vehicleNo: link.vehicleNo || null,
+            delta: +1,
+            resultingQuantity: next,
+            note: link.note || "Restored from edit",
+            createdBy: currentUser || "akash",
+            itemNameSnapshot: it.name + (it.category ? ` (${it.category})` : ""),
+          });
+        } catch (txErr) {
+          console.warn("Restore transaction record failed:", txErr);
+        }
+      }
+    } catch (err) {
+      console.warn("Restore failed for stock item", it.name, err);
+    }
+  }
+  return { restored };
 }
 
 function openAkashEditRepair(recordId) {
@@ -3946,7 +4528,11 @@ function renderInstallForm() {
           </div>
           <div class="field field-sensor" id="fieldSensor">
             <label for="instSensor">Sensor No <span class="required">*</span></label>
-            <input type="text" id="instSensor" required placeholder="e.g. SN-12345" autocomplete="off" />
+            <div class="input-with-scan">
+              <input type="text" id="instSensor" required placeholder="e.g. SN-12345 — ya 📷 se sensor QR scan karo" autocomplete="off" />
+              <button type="button" class="scan-btn" id="scanSensor" aria-label="Scan sensor QR">📷</button>
+            </div>
+            <p class="hint" style="font-size:0.78rem; color:#64748b;">📷 daba kar sensor ka QR scan karo — Sensor No + MAC ID dono auto fill ho jaayenge</p>
           </div>
           <div class="form-actions full-width">
             <button type="submit" class="btn btn-primary">Continue to Confirm</button>
@@ -4018,7 +4604,14 @@ function renderInstallForm() {
         const imeiInput = document.getElementById("instImei");
         imeiInput.value = cleaned;
         imeiInput.dispatchEvent(new Event("input"));
-        showToast(`IMEI scanned: ${cleaned}`);
+        // v3.9.19 — Enhanced feedback: check across ALL GPS stock categories
+        const matched = findStockByValue(cleaned);
+        const gpsMatch = matched.find((it) => categoryKind(it.category) === "gps");
+        if (gpsMatch) {
+          showToast(`✓ Stock me mila: ${gpsMatch.name} · Qty ${gpsMatch.quantity}`);
+        } else {
+          showToast(`IMEI scanned — stock me nahi, installation ke time auto-add ho jaayega`);
+        }
       },
     });
   });
@@ -4034,7 +4627,55 @@ function renderInstallForm() {
         const input = document.getElementById("instSim");
         input.value = cleaned;
         input.dispatchEvent(new Event("input"));
-        showToast(`ICCID scanned: ${cleaned}`);
+        // v3.9.19 — Enhanced feedback
+        const matched = findStockByValue(cleaned);
+        const simMatch = matched.find((it) => categoryKind(it.category) === "sim");
+        if (simMatch) {
+          showToast(`✓ Stock me mila: ${simMatch.name} · Qty ${simMatch.quantity}`);
+        } else {
+          showToast(`ICCID scanned — stock me nahi, installation ke time auto-add ho jaayega`);
+        }
+      },
+    });
+  });
+
+  // v3.9.17 — Scan sensor QR → parse esensors.pro URL → auto-fill
+  // Sensor No + MAC ID. Example scanned URL:
+  // https://doc.esensors.pro/m/124?s=122178&d=26.08&m=CD:64:13:90:B2:4B&//608263122178
+  document.getElementById("scanSensor")?.addEventListener("click", () => {
+    openBarcodeScannerModal({
+      title: "📷 Scan Sensor QR",
+      hint: "Sensor pe laga hua QR code camera pe point karo. Sensor No + MAC auto-fill ho jaayenge.",
+      codeType: "any",
+      onScan: (val) => {
+        const parsed = parseSensorQR(val);
+        if (!parsed.sensorNo && !parsed.macId) {
+          showToast("Ye sensor QR nahi lag raha. Manually type karo.", true);
+          return;
+        }
+        const sensorInput = document.getElementById("instSensor");
+        const macInput    = document.getElementById("instMac");
+        const msgs = [];
+        if (parsed.sensorNo && sensorInput) {
+          sensorInput.value = parsed.sensorNo;
+          sensorInput.dispatchEvent(new Event("input"));
+          msgs.push(`Sensor: ${parsed.sensorNo}`);
+        }
+        if (parsed.macId && macInput) {
+          macInput.value = parsed.macId;
+          macInput.dispatchEvent(new Event("input"));
+          msgs.push(`MAC: ${parsed.macId}`);
+        }
+        // v3.9.19 — Check sensor stock status after scan
+        const matched = findStockByValue(parsed.sensorNo || "").concat(
+          parsed.macId ? findStockByValue(parsed.macId) : []
+        );
+        const sensorMatch = matched.find((it) => categoryKind(it.category) === "sensor");
+        if (sensorMatch) {
+          showToast(`✓ ${msgs.join(" · ")} — Stock me mila: ${sensorMatch.name}`);
+        } else {
+          showToast(`✓ ${msgs.join(" · ")} — Stock me nahi, installation ke time auto-add ho jaayega`);
+        }
       },
     });
   });
@@ -4119,19 +4760,20 @@ function renderInstallForm() {
     const matched = findStockByValue(v);
     const gpsMatch = matched.find((it) => categoryKind(it.category) === "gps");
     if (gpsMatch) {
+      // v3.9.18 — Cross-category auto-detect: FMB, FMC, Normal (PT06 etc.)
       const nameUpper = (gpsMatch.name + " " + (gpsMatch.category || "")).toUpperCase();
       let detectedType = "FMB";
-      if (nameUpper.includes("NORMAL")) detectedType = "Normal";
-      else if (nameUpper.includes("FMC")) detectedType = "FMC";
+      if (nameUpper.includes("FMC")) detectedType = "FMC";
       else if (nameUpper.includes("FMB")) detectedType = "FMB";
+      else if (nameUpper.includes("NORMAL") || nameUpper.includes("PT06") || nameUpper.includes("PT-06")) detectedType = "Normal";
       if (typeof applyGpsType === "function") applyGpsType(detectedType);
-      h.innerHTML = `<span class="hint-found">✓ Found in database — Auto-selected: <strong>${escapeHtml(detectedType)}</strong> (${escapeHtml(gpsMatch.name)})</span>`;
+      h.innerHTML = `<span class="hint-found">✓ Stock me mila — Auto-selected: <strong>${escapeHtml(detectedType)}</strong> · ${escapeHtml(gpsMatch.name)} (Qty ${gpsMatch.quantity})</span>`;
       h.className = "hint hint-ok";
     } else if (matched.length > 0) {
-      h.innerHTML = `<span class="hint-found">✓ Found in database — ${escapeHtml(matched[0].name)}</span>`;
+      h.innerHTML = `<span class="hint-found">✓ Stock me mila — ${escapeHtml(matched[0].name)}</span>`;
       h.className = "hint hint-ok";
     } else {
-      h.textContent = "ℹ️ Not in stock database. Select GPS model above.";
+      h.textContent = "ℹ️ Stock me nahi — GPS model upar select karo.";
       h.className = "hint hint-info";
     }
   });
@@ -4425,6 +5067,28 @@ function handleInstallSubmit(gpsType = "FMB") {
       }
 
       const saved = await insertInstallation(newInstall);
+
+      // v3.9.19 — Agar GPS / SIM / Sensor stock me nahi hain, to pehle
+      // auto-add kar do taaki consumeStockFor unhe consume kar sake
+      // (otherwise Akash ko manually add karna padta).
+      let autoAddedGps = null;
+      let autoAddedSim = null;
+      let autoAddedSensor = null;
+      if (data.imei) {
+        autoAddedGps = await ensureGpsInStock(data.imei, {
+          gpsType,
+          vehicleNo: data.vehicle,
+        });
+      }
+      if (enteredIccid) {
+        autoAddedSim = await ensureSimInStock(enteredIccid, { vehicleNo: data.vehicle });
+      }
+      if (data.sensor || data.mac) {
+        autoAddedSensor = await ensureSensorInStock(data.sensor, data.mac, {
+          vehicleNo: data.vehicle,
+        });
+      }
+
       // Auto-consume matching stock entries.
       const consumeResult = await consumeStockFor(
         {
@@ -4442,8 +5106,19 @@ function handleInstallSubmit(gpsType = "FMB") {
       );
       await refreshAllData();
       const consumedCount = consumeResult?.consumed?.length || 0;
+      const toastParts = [];
       if (consumedCount > 0) {
-        showToast(`✓ Installation saved! Auto-linked ${consumedCount} stock item${consumedCount > 1 ? "s" : ""}.`);
+        toastParts.push(`Auto-linked ${consumedCount} stock item${consumedCount > 1 ? "s" : ""}`);
+      }
+      const autoAddedNames = [];
+      if (autoAddedGps) autoAddedNames.push("GPS");
+      if (autoAddedSim) autoAddedNames.push("SIM");
+      if (autoAddedSensor) autoAddedNames.push("Sensor");
+      if (autoAddedNames.length) {
+        toastParts.push(`${autoAddedNames.join(" + ")} auto-added to stock (review later)`);
+      }
+      if (toastParts.length) {
+        showToast(`✓ Installation saved! ${toastParts.join(" · ")}.`);
       } else {
         showToast("Installation saved successfully!");
       }
@@ -9748,7 +10423,8 @@ function openStockEditor(itemId, categoryOptions) {
     </div>
 
     <div id="metaSensor" class="meta-block hidden">
-      <div class="meta-title">🛰️ Sensor identifiers</div>
+      <div class="meta-title">🛰️ Sensor identifiers <button type="button" id="metaScanSensor" class="btn btn-outline btn-sm" style="margin-left:0.5rem;">📷 Scan QR</button></div>
+      <p class="hint" style="font-size:0.78rem; margin-bottom:0.5rem;">Sensor pe laga QR scan karo — Sensor No + MAC ID dono auto fill ho jaayenge</p>
       <div class="field-row">
         <div class="field">
           <label for="metaSensorNo">Sensor number <span class="required">*</span></label>
@@ -9963,6 +10639,26 @@ function openStockEditor(itemId, categoryOptions) {
   });
   // Initial duplicate check if editing
   if (item) refreshDupWarn();
+
+  // v3.9.17 — Scan sensor QR in stock modal → auto-fill Sensor + MAC
+  modal.querySelector('#metaScanSensor')?.addEventListener('click', () => {
+    openBarcodeScannerModal({
+      title: "📷 Scan Sensor QR",
+      hint: "Sensor pe laga QR scan karo.",
+      codeType: "any",
+      onScan: (val) => {
+        const parsed = parseSensorQR(val);
+        if (!parsed.sensorNo && !parsed.macId) {
+          showToast("Ye sensor QR nahi lag raha.", true);
+          return;
+        }
+        const msgs = [];
+        if (parsed.sensorNo) { modal.querySelector("#metaSensorNo").value = parsed.sensorNo; msgs.push(`Sensor: ${parsed.sensorNo}`); }
+        if (parsed.macId)    { modal.querySelector("#metaMacId").value    = parsed.macId;    msgs.push(`MAC: ${parsed.macId}`); }
+        showToast(`✓ ${msgs.join(" · ")}`);
+      },
+    });
+  });
 
   modal.querySelector('[data-act="save"]').onclick = async () => {
     const name = nameEl.value.trim();
