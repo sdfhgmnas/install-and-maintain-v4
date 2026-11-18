@@ -1761,8 +1761,8 @@ async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Po
       <div class="qr-status" id="qrStatus">${escapeHtml(hint)}</div>
     </div>
 
-    <div class="manual-entry-block" style="margin-top: 0.7rem; background:#fef3c7; border:1.5px solid #fde68a; padding: 0.7rem; border-radius: 8px;">
-      <label for="manualScanInput" style="font-weight:700; color:#92400e;">✏️ Scan nahi ho raha? Type karo:</label>
+    <div class="manual-entry-block" style="margin-top: 0.8rem;">
+      <label for="manualScanInput" style="font-weight:600; color:#334155; font-size:0.85rem;">✏️ Scan nahi ho raha? Type karo:</label>
       <div class="input-with-scan" style="margin-top: 0.4rem;">
         <input type="text" id="manualScanInput" autocomplete="off" inputmode="numeric" placeholder="Paste or type the number" style="font-size:1rem; padding:0.6rem;" />
         <button type="button" class="btn btn-primary" id="manualScanOk" style="padding:0.6rem 1.2rem;">✓ OK</button>
@@ -2149,7 +2149,22 @@ async function initFallbackSingleScanner(onDetect, setStatus) {
       const scanner = new HQR("singleScanDiv", { verbose: false, formatsToSupport: allFormats });
       await scanner.start(
         { facingMode: "environment" },
-        { fps: 15, qrbox: { width: 280, height: 120 } },
+        {
+          fps: 15,
+          // v3.9.16 — Larger scan box so small barcodes anywhere detect
+          qrbox: (vw, vh) => ({
+            width:  Math.min(vw * 0.95, 500),
+            height: Math.min(vh * 0.60, 220),
+          }),
+          formatsToSupport: allFormats,
+          experimentalFeatures: { useBarCodeDetectorIfSupported: false },
+          videoConstraints: {
+            facingMode: "environment",
+            width: { ideal: 1920, min: 1280 },
+            height: { ideal: 1080, min: 720 },
+            focusMode: "continuous",
+          },
+        },
         async (decodedText) => {
           try { await scanner.stop(); } catch {}
           try { await scanner.clear(); } catch {}
@@ -2157,7 +2172,34 @@ async function initFallbackSingleScanner(onDetect, setStatus) {
         },
         () => {}
       );
-      setStatus("📷 Scanner ready (fallback) — point at barcode");
+      setStatus("🔬 Stronger scanner ready — point at barcode");
+
+      // Wire torch button after start — ZXing scanner creates its own video
+      setTimeout(() => {
+        try {
+          const vid = document.querySelector("#singleScanDiv video");
+          const vidStream = vid?.srcObject;
+          const vidTrack = vidStream?.getVideoTracks?.()[0];
+          if (vidTrack) {
+            const caps = vidTrack.getCapabilities?.() || {};
+            const torchBtn = document.getElementById("singleTorchBtn");
+            if (torchBtn) {
+              let torchOn = false;
+              torchBtn.onclick = async () => {
+                if (!caps.torch) {
+                  showToast("Phone doesn't expose torch control to browser.", true);
+                  return;
+                }
+                torchOn = !torchOn;
+                try {
+                  await vidTrack.applyConstraints({ advanced: [{ torch: torchOn }] });
+                  torchBtn.classList.toggle("active", torchOn);
+                } catch { showToast("Couldn't toggle torch.", true); }
+              };
+            }
+          }
+        } catch {}
+      }, 500);
     } catch (e) {
       console.error("Fallback scanner failed:", e);
       setStatus("❌ Scanner failed — type manually below");
@@ -11518,8 +11560,8 @@ function openBulkScanModal() {
       <div class="qr-status" id="qrStatus">Initialising camera…</div>
     </div>
 
-    <div class="manual-entry-block" style="margin-top: 0.7rem; background:#fef3c7; border:1.5px solid #fde68a; padding: 0.7rem; border-radius: 8px;">
-      <label style="font-weight:700; color:#92400e; display:block; margin-bottom:0.3rem;">✏️ Scan nahi ho raha? Type karo:</label>
+    <div class="manual-entry-block" style="margin-top: 0.8rem;">
+      <label style="font-weight:600; color:#334155; font-size:0.85rem; display:block; margin-bottom:0.3rem;">✏️ Scan nahi ho raha? Type karo:</label>
       <div class="input-with-scan">
         <input type="text" id="bulkManualImei" placeholder="Or type ${escapeHtml(typeInfo.label)} manually" inputmode="numeric" autocomplete="off" style="font-size:1rem; padding:0.6rem;" />
         <button type="button" class="btn btn-primary" id="bulkManualAdd" style="padding:0.6rem 1.2rem;">+ Add</button>
@@ -15574,4 +15616,5 @@ function numToWords(n) {
   if (hundred) out += inWords(hundred);
   return out.trim();
 }
+
 initApp();
