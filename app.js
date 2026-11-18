@@ -1697,8 +1697,6 @@ async function prewarmCamera() {
   if (_cameraPrewarmed) return;
   if (!navigator.mediaDevices?.getUserMedia) return;
   try {
-    // Prewarm just needs permission; resolution doesn't matter here.
-    // Use original low res to avoid fail on older devices.
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: "environment" }, width: { ideal: 640 }, height: { ideal: 480 } },
       audio: false,
@@ -1753,6 +1751,7 @@ async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Po
       <div class="qr-focus-ring" id="singleFocusRing"></div>
       <div class="qr-controls">
         <button type="button" class="qr-icon-btn" id="singleTorchBtn" aria-label="Torch">🔦</button>
+        <button type="button" class="qr-icon-btn" id="singleEngineBtn" aria-label="Stronger scanner" title="Switch to stronger engine (ZXing)">🔬</button>
       </div>
       <div class="qr-zoom-control" id="singleZoomWrap" style="display:none;">
         <span class="qr-zoom-label">🔍</span>
@@ -1765,7 +1764,7 @@ async function openBarcodeScannerModal({ title = "📷 Scan Barcode", hint = "Po
     <div class="manual-entry-block" style="margin-top: 0.7rem; background:#fef3c7; border:1.5px solid #fde68a; padding: 0.7rem; border-radius: 8px;">
       <label for="manualScanInput" style="font-weight:700; color:#92400e;">✏️ Scan nahi ho raha? Type karo:</label>
       <div class="input-with-scan" style="margin-top: 0.4rem;">
-        <input type="text" id="manualScanInput" autocomplete="off" inputmode="numeric" placeholder="Barcode ke neeche jo number likha hai wo type karo" style="font-size:1rem; padding:0.6rem;" />
+        <input type="text" id="manualScanInput" autocomplete="off" inputmode="numeric" placeholder="Paste or type the number" style="font-size:1rem; padding:0.6rem;" />
         <button type="button" class="btn btn-primary" id="manualScanOk" style="padding:0.6rem 1.2rem;">✓ OK</button>
       </div>
     </div>
@@ -1945,27 +1944,18 @@ async function initNativeSingleScanner(onDetect, setStatus, captureStream, isAct
 
     setStatus("Requesting camera permission…");
 
-    // v3.9.16 — Try HD first (helps small/dense barcodes like PT06).
-    // Silently falls back to the original (unconstrained) behavior if HD
-    // fails — so older phones never see a regression.
+    // v3.9.16 — Try HD first for small barcodes (PT06 etc.), silently
+    // fall back to original behavior if HD fails on older phones.
     const HI_RES = { width: { ideal: 1920 }, height: { ideal: 1080 } };
-    const tryGUM = async (constraints) => {
-      try { return await navigator.mediaDevices.getUserMedia(constraints); }
-      catch { return null; }
+    const tryGUM = async (c) => {
+      try { return await navigator.mediaDevices.getUserMedia(c); } catch { return null; }
     };
 
     let stream = null;
-
-    // Pass 1 — ideal environment + HD
     stream = await tryGUM({ video: { facingMode: { ideal: "environment" }, ...HI_RES }, audio: false });
-    // Pass 2 — ideal environment WITHOUT HD (original behaviour)
     if (!stream) stream = await tryGUM({ video: { facingMode: { ideal: "environment" } }, audio: false });
-    // Pass 3 — exact environment + HD
     if (!stream) stream = await tryGUM({ video: { facingMode: { exact: "environment" }, ...HI_RES }, audio: false });
-    // Pass 4 — exact environment WITHOUT HD
     if (!stream) stream = await tryGUM({ video: { facingMode: { exact: "environment" } }, audio: false });
-
-    // Pass 5 — enumerate + back-cam by deviceId
     if (!stream) {
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
@@ -1977,8 +1967,6 @@ async function initNativeSingleScanner(onDetect, setStatus, captureStream, isAct
         }
       } catch {}
     }
-
-    // Pass 6 — any camera at all (last resort)
     if (!stream) stream = await tryGUM({ video: true, audio: false });
 
     if (!stream) {
@@ -2023,28 +2011,27 @@ async function initNativeSingleScanner(onDetect, setStatus, captureStream, isAct
         } catch {}
       });
     }
+    let singleCapabilities = {};
     if (track) {
       try {
-        const capabilities = track.getCapabilities?.() || {};
+        singleCapabilities = track.getCapabilities?.() || {};
         const advanced = [];
-        if (capabilities.focusMode && capabilities.focusMode.includes("continuous")) {
+        if (singleCapabilities.focusMode && singleCapabilities.focusMode.includes("continuous")) {
           advanced.push({ focusMode: "continuous" });
         }
-        // v3.9.16 — Default zoom bumped to 2× for small barcodes (PT06 etc.)
-        if (capabilities.zoom) {
-          const defaultZ = Math.min(Math.max(2.0, capabilities.zoom.min || 1), capabilities.zoom.max || 1);
+        // v3.9.16 — Default zoom 2× for small barcodes + slider
+        if (singleCapabilities.zoom) {
+          const defaultZ = Math.min(Math.max(2.0, singleCapabilities.zoom.min || 1), singleCapabilities.zoom.max || 1);
           advanced.push({ zoom: defaultZ });
-
-          // Wire manual zoom slider — range from device min to min(device max, 5×)
           const zoomWrap   = document.getElementById("singleZoomWrap");
           const zoomSlider = document.getElementById("singleZoomSlider");
           const zoomVal    = document.getElementById("singleZoomVal");
           if (zoomWrap && zoomSlider && zoomVal) {
-            const zMin = capabilities.zoom.min || 1;
-            const zMax = Math.min(capabilities.zoom.max || 5, 5);
+            const zMin = singleCapabilities.zoom.min || 1;
+            const zMax = Math.min(singleCapabilities.zoom.max || 5, 5);
             zoomSlider.min  = zMin;
             zoomSlider.max  = zMax;
-            zoomSlider.step = capabilities.zoom.step || 0.1;
+            zoomSlider.step = singleCapabilities.zoom.step || 0.1;
             zoomSlider.value = defaultZ;
             zoomVal.textContent = `${defaultZ.toFixed(1)}×`;
             zoomWrap.style.display = "flex";
@@ -2057,13 +2044,12 @@ async function initNativeSingleScanner(onDetect, setStatus, captureStream, isAct
         }
         if (advanced.length) await track.applyConstraints({ advanced }).catch(() => {});
 
-        // v3.9.16 — Torch always visible; if device doesn't support it,
-        // button shows a toast so user knows it's phone-side, not app-side.
+        // Torch always visible; unsupported shows toast
         const torchBtn = document.getElementById("singleTorchBtn");
         if (torchBtn) {
           let torchOn = false;
           torchBtn.addEventListener("click", async () => {
-            if (!capabilities.torch) {
+            if (!singleCapabilities.torch) {
               showToast("Phone doesn't expose torch control to browser.", true);
               return;
             }
@@ -2071,17 +2057,39 @@ async function initNativeSingleScanner(onDetect, setStatus, captureStream, isAct
             try {
               await track.applyConstraints({ advanced: [{ torch: torchOn }] });
               torchBtn.classList.toggle("active", torchOn);
-            } catch {
-              showToast("Couldn't toggle torch.", true);
-            }
+            } catch { showToast("Couldn't toggle torch.", true); }
           });
         }
       } catch (e) { console.warn("Camera tweaks failed:", e); }
     }
 
+    // v3.9.16 — Engine switch (🔬) + auto-switch to ZXing after 8s
+    let switchedToZXing = false;
+    const scanStartedAt = Date.now();
+    const switchToZXing = async () => {
+      if (switchedToZXing || !isActive()) return;
+      switchedToZXing = true;
+      setStatus("🔬 Switching to stronger scanner (ZXing)…");
+      try {
+        try { stream.getTracks().forEach((t) => t.stop()); } catch {}
+        await initFallbackSingleScanner(onDetect, setStatus);
+      } catch (e) {
+        console.warn("Engine switch failed:", e);
+        setStatus("Scanner switch failed — type manually below");
+      }
+    };
+    const engineBtn = document.getElementById("singleEngineBtn");
+    if (engineBtn) {
+      engineBtn.addEventListener("click", () => {
+        if (switchedToZXing) { showToast("Already using stronger scanner.", true); return; }
+        showToast("Switching to stronger scanner…");
+        switchToZXing();
+      });
+    }
+
     let scanErrCount = 0;
     const scanLoop = async () => {
-      if (!isActive()) return;
+      if (!isActive() || switchedToZXing) return;
       try {
         if (video.readyState >= 2 && video.videoWidth > 0) {
           const barcodes = await detector.detect(video);
@@ -2094,6 +2102,11 @@ async function initNativeSingleScanner(onDetect, setStatus, captureStream, isAct
           }
         }
         scanErrCount = 0;
+        // Auto-switch to ZXing after 8s no detection
+        if (!switchedToZXing && Date.now() - scanStartedAt > 8000) {
+          switchToZXing();
+          return;
+        }
       } catch (e) {
         scanErrCount++;
         if (scanErrCount === 1) console.warn("Detector error:", e);
@@ -11495,7 +11508,7 @@ function openBulkScanModal() {
       <div class="qr-scan-line"></div>
       <div class="qr-controls">
         <button type="button" class="qr-icon-btn" id="bulkTorchBtn" aria-label="Torch">🔦</button>
-        <button type="button" class="qr-icon-btn" id="bulkEngineBtn" aria-label="Switch to stronger scanner" title="Use stronger engine (ZXing)">🔬</button>
+        <button type="button" class="qr-icon-btn" id="bulkEngineBtn" aria-label="Stronger scanner" title="Switch to stronger engine (ZXing)">🔬</button>
       </div>
       <div class="qr-zoom-control" id="bulkZoomWrap" style="display:none;">
         <span class="qr-zoom-label">🔍</span>
@@ -11506,7 +11519,7 @@ function openBulkScanModal() {
     </div>
 
     <div class="manual-entry-block" style="margin-top: 0.7rem; background:#fef3c7; border:1.5px solid #fde68a; padding: 0.7rem; border-radius: 8px;">
-      <label style="font-weight:700; color:#92400e; display:block; margin-bottom: 0.3rem;">✏️ Scan nahi ho raha? Type karo:</label>
+      <label style="font-weight:700; color:#92400e; display:block; margin-bottom:0.3rem;">✏️ Scan nahi ho raha? Type karo:</label>
       <div class="input-with-scan">
         <input type="text" id="bulkManualImei" placeholder="Or type ${escapeHtml(typeInfo.label)} manually" inputmode="numeric" autocomplete="off" style="font-size:1rem; padding:0.6rem;" />
         <button type="button" class="btn btn-primary" id="bulkManualAdd" style="padding:0.6rem 1.2rem;">+ Add</button>
@@ -11771,37 +11784,28 @@ async function initNativeBulkScanner(addImei, setStatus, cleanup) {
 
     setStatus("Requesting camera permission…");
 
-    // STRICT: enforce back camera. v3.9.16 — Try HD first for small/dense
-    // barcodes (PT06 etc.), silently fall back to default resolution if HD fails.
+    // v3.9.16 — HD-first fallback chain (silently degrades on old phones)
     const HI_RES_B = { width: { ideal: 1920 }, height: { ideal: 1080 } };
-    const tryGUM = async (c) => {
+    const tryGUM_B = async (c) => {
       try { return await navigator.mediaDevices.getUserMedia(c); } catch { return null; }
     };
-
     let stream = null;
-    // Pass 1 — ideal environment + HD
-    stream = await tryGUM({ video: { facingMode: { ideal: "environment" }, ...HI_RES_B }, audio: false });
-    // Pass 2 — ideal environment WITHOUT HD (original)
-    if (!stream) stream = await tryGUM({ video: { facingMode: { ideal: "environment" } }, audio: false });
-    // Pass 3 — exact environment + HD
-    if (!stream) stream = await tryGUM({ video: { facingMode: { exact: "environment" }, ...HI_RES_B }, audio: false });
-    // Pass 4 — exact environment WITHOUT HD
-    if (!stream) stream = await tryGUM({ video: { facingMode: { exact: "environment" } }, audio: false });
-    // Pass 5 — enumerate + back-cam by deviceId
+    stream = await tryGUM_B({ video: { facingMode: { ideal: "environment" }, ...HI_RES_B }, audio: false });
+    if (!stream) stream = await tryGUM_B({ video: { facingMode: { ideal: "environment" } }, audio: false });
+    if (!stream) stream = await tryGUM_B({ video: { facingMode: { exact: "environment" }, ...HI_RES_B }, audio: false });
+    if (!stream) stream = await tryGUM_B({ video: { facingMode: { exact: "environment" } }, audio: false });
     if (!stream) {
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
         const cams = devices.filter((d) => d.kind === "videoinput");
         const back = cams.find((c) => /back|rear|environment|world|wide(?!.*front)/i.test(c.label || ""));
         if (back) {
-          stream = await tryGUM({ video: { deviceId: { exact: back.deviceId }, ...HI_RES_B }, audio: false });
-          if (!stream) stream = await tryGUM({ video: { deviceId: { exact: back.deviceId } }, audio: false });
+          stream = await tryGUM_B({ video: { deviceId: { exact: back.deviceId }, ...HI_RES_B }, audio: false });
+          if (!stream) stream = await tryGUM_B({ video: { deviceId: { exact: back.deviceId } }, audio: false });
         }
       } catch (e) { console.warn("Enum failed:", e); }
     }
-    // Pass 6 — any camera at all
-    if (!stream) stream = await tryGUM({ video: true, audio: false });
-
+    if (!stream) stream = await tryGUM_B({ video: true, audio: false });
     if (!stream) {
       setStatus("❌ Camera permission denied or unavailable");
       return;
@@ -11826,28 +11830,27 @@ async function initNativeBulkScanner(addImei, setStatus, cleanup) {
 
     // Try to apply zoom + focus AFTER stream is working (safe, optional)
     const track = stream.getVideoTracks()[0];
+    let bulkCapabilities = {};
     if (track) {
       try {
-        const capabilities = track.getCapabilities?.() || {};
+        bulkCapabilities = track.getCapabilities?.() || {};
         const advanced = [];
-        if (capabilities.focusMode && capabilities.focusMode.includes("continuous")) {
+        if (bulkCapabilities.focusMode && bulkCapabilities.focusMode.includes("continuous")) {
           advanced.push({ focusMode: "continuous" });
         }
-        // v3.9.16 — Default zoom 2× for small barcodes (PT06)
-        if (capabilities.zoom) {
-          const defaultZ = Math.min(Math.max(2.0, capabilities.zoom.min || 1), capabilities.zoom.max || 1);
+        // v3.9.16 — Default zoom 2× for small barcodes + slider
+        if (bulkCapabilities.zoom) {
+          const defaultZ = Math.min(Math.max(2.0, bulkCapabilities.zoom.min || 1), bulkCapabilities.zoom.max || 1);
           advanced.push({ zoom: defaultZ });
-
-          // Wire manual zoom slider
           const zoomWrap   = document.getElementById("bulkZoomWrap");
           const zoomSlider = document.getElementById("bulkZoomSlider");
           const zoomVal    = document.getElementById("bulkZoomVal");
           if (zoomWrap && zoomSlider && zoomVal) {
-            const zMin = capabilities.zoom.min || 1;
-            const zMax = Math.min(capabilities.zoom.max || 5, 5);
+            const zMin = bulkCapabilities.zoom.min || 1;
+            const zMax = Math.min(bulkCapabilities.zoom.max || 5, 5);
             zoomSlider.min  = zMin;
             zoomSlider.max  = zMax;
-            zoomSlider.step = capabilities.zoom.step || 0.1;
+            zoomSlider.step = bulkCapabilities.zoom.step || 0.1;
             zoomSlider.value = defaultZ;
             zoomVal.textContent = `${defaultZ.toFixed(1)}×`;
             zoomWrap.style.display = "flex";
@@ -11860,12 +11863,12 @@ async function initNativeBulkScanner(addImei, setStatus, cleanup) {
         }
         if (advanced.length) await track.applyConstraints({ advanced }).catch(() => {});
 
-        // Torch — always visible; unsupported shows toast
+        // Torch always visible; unsupported shows toast
         const torchBtn = document.getElementById("bulkTorchBtn");
         if (torchBtn) {
           let torchOn = false;
           torchBtn.addEventListener("click", async () => {
-            if (!capabilities.torch) {
+            if (!bulkCapabilities.torch) {
               showToast("Phone doesn't expose torch control to browser.", true);
               return;
             }
@@ -11881,42 +11884,32 @@ async function initNativeBulkScanner(addImei, setStatus, cleanup) {
       }
     }
 
-    // ----- Scan loop -----
-    let scanErrCount = 0;
-    let lastDetectedAt = Date.now();
+    // v3.9.16 — Engine switch (🔬) + auto-switch to ZXing after 8s no detect
     let switchedToZXing = false;
-
-    // v3.9.16 — Auto-switch to ZXing (stronger engine) after 8s with no detection,
-    // OR manual switch via 🔬 button. ZXing matches dedicated scanner apps better
-    // for small/dense barcodes like PT06.
+    const scanStartedAt = Date.now();
     const switchToZXing = async () => {
       if (switchedToZXing || !_bulkScanState.active) return;
       switchedToZXing = true;
       setStatus("🔬 Switching to stronger scanner (ZXing)…");
       try {
-        // Stop current stream
         try { stream.getTracks().forEach((t) => t.stop()); } catch {}
-        // Hand off to html5-qrcode fallback
         initFallbackBulkScanner(addImei, setStatus);
       } catch (e) {
         console.warn("Engine switch failed:", e);
         setStatus("Scanner switch failed — type manually below");
       }
     };
-
-    // Manual switch via 🔬 button
     const engineBtn = document.getElementById("bulkEngineBtn");
     if (engineBtn) {
       engineBtn.addEventListener("click", () => {
-        if (switchedToZXing) {
-          showToast("Already using stronger scanner.", true);
-          return;
-        }
+        if (switchedToZXing) { showToast("Already using stronger scanner.", true); return; }
         showToast("Switching to stronger scanner…");
         switchToZXing();
       });
     }
 
+    // ----- Scan loop -----
+    let scanErrCount = 0;
     const scanLoop = async () => {
       if (!_bulkScanState.active || switchedToZXing) return;
       try {
@@ -11925,14 +11918,13 @@ async function initNativeBulkScanner(addImei, setStatus, cleanup) {
           if (barcodes && barcodes.length > 0) {
             for (const bc of barcodes) {
               const value = (bc.rawValue || "").trim();
-              if (value) { addImei(value); lastDetectedAt = Date.now(); }
+              if (value) addImei(value);
             }
           }
         }
         scanErrCount = 0;
-
-        // Auto-switch if no detection for 8s
-        if (!switchedToZXing && Date.now() - lastDetectedAt > 8000 && _bulkScanState.scanned.length === 0) {
+        // Auto-switch if nothing detected after 8s AND nothing scanned yet
+        if (!switchedToZXing && Date.now() - scanStartedAt > 8000 && _bulkScanState.scanned.length === 0) {
           switchToZXing();
           return;
         }
@@ -11985,10 +11977,7 @@ async function initFallbackBulkScanner(addImei, setStatus) {
         { facingMode: "environment" },
         {
           fps: 15,
-          // v3.9.16 — Larger scan box (95% width, 60% height) so PT06-style
-          // small barcodes positioned anywhere in viewfinder still detect.
-          // Turn OFF useBarCodeDetectorIfSupported so we actually use ZXing
-          // (the point of the "stronger scanner").
+          // v3.9.16 — Larger scan box + force ZXing (no native fallback)
           qrbox: (vw, vh) => ({
             width:  Math.min(vw * 0.95, 500),
             height: Math.min(vh * 0.60, 220),
@@ -12006,31 +11995,6 @@ async function initFallbackBulkScanner(addImei, setStatus) {
         () => {}
       );
       setStatus("🔬 Stronger scanner ready — point at barcode");
-
-      // Try to apply torch via html5-qrcode's advanced controls
-      try {
-        const track = _bulkScanState.scanner.getRunningTrackCameraCapabilities?.();
-        const stream = _bulkScanState.scanner._stream || _bulkScanState.scanner._element?.srcObject;
-        if (stream) {
-          const videoTrack = stream.getVideoTracks?.()[0];
-          if (videoTrack) {
-            const caps = videoTrack.getCapabilities?.() || {};
-            if (caps.torch) {
-              const torchBtn = document.getElementById("bulkTorchBtn");
-              if (torchBtn) {
-                let torchOn = false;
-                torchBtn.onclick = async () => {
-                  torchOn = !torchOn;
-                  try {
-                    await videoTrack.applyConstraints({ advanced: [{ torch: torchOn }] });
-                    torchBtn.classList.toggle("active", torchOn);
-                  } catch {}
-                };
-              }
-            }
-          }
-        }
-      } catch {}
     } catch (err) {
       console.warn("Fallback scanner failed:", err);
       setStatus("Camera unavailable — type manually below.");
@@ -15610,5 +15574,4 @@ function numToWords(n) {
   if (hundred) out += inWords(hundred);
   return out.trim();
 }
-
 initApp();
