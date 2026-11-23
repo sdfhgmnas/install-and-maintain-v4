@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.9.35";
+const APP_VERSION = "3.9.36";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -7647,18 +7647,96 @@ function navForCurrentUser() {
   return ADMIN_NAV.filter((n) => !n.adminOnly && (perms.allowedPages || []).includes(n.key));
 }
 
+/* ============================================================
+   v3.9.36 — xray-style side rail (desktop ≥1024px)
+   ------------------------------------------------------------
+   Separate component from the legacy .admin-nav (which stays
+   for tablet / mobile). Collapsed = 72px icon rail; on hover it
+   slides out to 256px showing brand, section titles, labels and
+   badge counts — like xray.tasrbharatnext.com.
+   ============================================================ */
+const RAIL_ICON_PATHS = {
+  dashboard:     '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/>',
+  installations: '<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.62l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/>',
+  repairs:       '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  pending:       '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  "sim-db":      '<path d="M7 2h8l5 5v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><rect x="8.5" y="11" width="7" height="7" rx="1"/><path d="M12 11v7"/><path d="M8.5 14.5h7"/>',
+  stock:         '<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="M3.3 7 12 12l8.7-5"/><path d="m7.5 4.27 9 5.15"/>',
+  accounts:      '<path d="M6 3h12"/><path d="M6 8h12"/><path d="m6 13 8.5 8"/><path d="M6 13h3"/><path d="M9 13c6.67 0 6.67-10 0-10"/>',
+  renewals:      '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  timeline:      '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+  deletions:     '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+  "user-access": '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+};
+
+function railIconSvg(key) {
+  return `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${RAIL_ICON_PATHS[key] || '<circle cx="12" cy="12" r="8"/>'}</svg>`;
+}
+
+function renderSideRail(activeKey, navItems) {
+  const pendingCount = (() => { try { return getPendingActionRows().length; } catch { return 0; } })();
+  const badges = {
+    pending:   pendingCount ? { n: pendingCount, cls: "warn" } : null,
+    deletions: deletionLog.length ? { n: deletionLog.length, cls: "" } : null,
+  };
+  const fmtBadge = (n) => (n > 99 ? "99+" : String(n));
+  const syncTime = lastSyncedAt
+    ? new Date(lastSyncedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
+    : "—";
+
+  const itemHtml = (n) => {
+    const b = badges[n.key];
+    return `
+      <button type="button" class="rail-item ${n.key === activeKey ? "active" : ""}" data-nav="${n.view}" aria-label="${escapeHtml(n.labelLong)}">
+        <span class="rail-ico">${railIconSvg(n.key)}${b ? `<span class="rail-dot ${b.cls}">${fmtBadge(b.n)}</span>` : ""}</span>
+        <span class="rail-label">${escapeHtml(n.labelLong)}</span>
+        ${b ? `<span class="rail-count ${b.cls}">${fmtBadge(b.n)}</span>` : ""}
+      </button>`;
+  };
+
+  const mainItems  = navItems.filter((n) => !n.adminOnly);
+  const adminItems = navItems.filter((n) => n.adminOnly);
+
+  return `
+    <aside class="side-rail" aria-label="Main navigation">
+      <div class="rail-brand">
+        <span class="rail-logo">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 21s-6-5.3-6-10a6 6 0 1 1 12 0c0 4.7-6 10-6 10z"/><circle cx="12" cy="11" r="2.4"/>
+          </svg>
+        </span>
+        <span class="rail-brand-text">
+          <strong>GPS TRACKER</strong>
+          <small>Install &amp; Maintain · TASR</small>
+        </span>
+      </div>
+      <div class="rail-scroll">
+        <div class="rail-section"><span class="rail-label">Operations</span></div>
+        ${mainItems.map(itemHtml).join("")}
+        ${adminItems.length ? `
+          <div class="rail-section"><span class="rail-label">Admin</span></div>
+          ${adminItems.map(itemHtml).join("")}
+        ` : ""}
+      </div>
+      <div class="rail-foot">
+        <span class="rail-live-dot"></span>
+        <span class="rail-label">Data as of ${escapeHtml(syncTime)}</span>
+      </div>
+    </aside>
+  `;
+}
+
 function renderAdminNav(activeKey) {
   const navItems = navForCurrentUser();
-  // v3.9.35 — Single rail with icon + label; admin extras (Timeline, Deletions,
-  // User Access) are part of the same list now, no separate footer row.
-  // Deletion count is appended to its label.
+  // .side-rail = desktop (≥1024px); .admin-nav + bottom bar = tablet/mobile.
   return `
+    ${renderSideRail(activeKey, navItems)}
     <div class="admin-nav">${navItems.map((n) => {
       let labelText = n.label;
       if (n.key === "deletions" && deletionLog.length) {
         labelText = `${n.label} (${deletionLog.length})`;
       }
-      return `<button type="button" class="nav-pill ${n.key === activeKey ? "active" : ""}" data-nav="${n.view}" title="${escapeHtml(n.labelLong)}">
+      return `<button type="button" class="nav-pill ${n.key === activeKey ? "active" : ""}" data-nav="${n.view}">
         <span class="nav-icon">${n.icon}</span>
         <span class="nav-label-short">${escapeHtml(labelText)}</span>
         <span class="nav-label-long">${escapeHtml(n.labelLong)}</span>
