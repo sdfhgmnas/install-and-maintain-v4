@@ -58,13 +58,15 @@ function rowToInstallation(row) {
     imeiHistory: row.imei_history || [],
     simHistory: row.sim_history || [],
     tasks: row.tasks && typeof row.tasks === "object" ? row.tasks : {},
+    calibrationFiles: Array.isArray(row.calibration_files) ? row.calibration_files : [],
+    vehiclePhotos:    Array.isArray(row.vehicle_photos)    ? row.vehicle_photos    : [],
     createdAt: row.created_at,
     createdBy: row.created_by,
   };
 }
 
 function installationToRow(inst) {
-  return {
+  const row = {
     id: inst.id,
     vehicle_no: inst.vehicleNo,
     gps_model: inst.gpsModel,
@@ -77,6 +79,15 @@ function installationToRow(inst) {
     created_at: inst.createdAt,
     created_by: inst.createdBy,
   };
+  // Only include JSONB arrays when explicitly set — avoids wiping them on
+  // legacy updates that don't touch these fields.
+  if (inst.calibrationFiles !== undefined) {
+    row.calibration_files = Array.isArray(inst.calibrationFiles) ? inst.calibrationFiles : [];
+  }
+  if (inst.vehiclePhotos !== undefined) {
+    row.vehicle_photos = Array.isArray(inst.vehiclePhotos) ? inst.vehiclePhotos : [];
+  }
+  return row;
 }
 
 function rowToMaintenance(row) {
@@ -682,6 +693,323 @@ async function deleteSupplier(id) {
    reversal is handled in app.js (consumeStockReverse).
    ============================================================ */
 
+/* ============================================================
+   CALIBRATION FILES — Supabase Storage helpers (v3.9.21)
+   ------------------------------------------------------------
+   Files live in the `calibration-files` bucket at path:
+     <installationId>/<timestamp>-<safe-filename>
+   The bucket is public so getPublicUrl works; the path contains
+   a UUID so it is effectively unguessable.
+   ============================================================ */
+
+const CALIBRATION_BUCKET = "calibration-files";
+const CALIBRATION_MAX_BYTES = 25 * 1024 * 1024; // 25 MB per file
+const CALIBRATION_ALLOWED_EXT = new Set([
+  "pdf", "xlsx", "xls", "ods", "csv",
+  "png", "jpg", "jpeg", "webp", "heic", "heif",
+]);
+
+/* ============================================================
+   Client-side image compression (v3.9.26)
+   ------------------------------------------------------------
+   Phone cameras produce 3-8 MB JPGs. Before upload we:
+     1. Load into an Image
+     2. Scale so the longest side is <= maxDim (1920 default)
+     3. Draw to canvas, export as JPEG with quality 0.82
+     4. If the result is SMALLER than original, return the new File
+        (otherwise keep original — e.g., tiny screenshots)
+     5. Non-image files (PDF, XLSX, etc.) pass through unchanged
+     6. HEIC/HEIF files that the browser can't decode pass through
+   ============================================================ */
+
+const IMAGE_EXTENSIONS = new Set(["png","jpg","jpeg","webp","heic","heif"]);
+
+function _isImageFile(file) {
+  if (!file) return false;
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  return (
+    IMAGE_EXTENSIONS.has(ext) ||
+    String(file.type || "").startsWith("image/")
+  );
+}
+
+/**
+ * Adaptive compression: targets ~150 KB per image.
+ * Strategy (v3.9.27):
+ *   - Start at maxDim 1280, quality 0.72
+ *   - If still > targetBytes, reduce quality by 0.05 each try (floor 0.45)
+ *   - If still > targetBytes at min quality, drop maxDim to 1024 → 800
+ *   - Hard floor: 800px @ quality 0.45 (never go below)
+ * This keeps number plates / stickers legible while producing
+ * roughly 100-180 KB files from typical phone photos.
+ */
+async function compressImageIfPossible(file, options = {}) {
+  if (!_isImageFile(file)) return file;
+  const targetBytes        = options.targetBytes || 150 * 1024;   // ~150 KB
+  const startMaxDim        = options.maxDim      || 1280;
+  const startQuality       = options.quality     || 0.72;
+  const minQuality         = options.minQuality  || 0.45;
+  const minBytesToCompress = options.minBytesToCompress || 150 * 1024;
+
+  // Already small enough? Skip.
+  if (file.size <= minBytesToCompress) return file;
+
+  try {
+    // Load image — createImageBitmap handles EXIF auto-rotate on most browsers
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+    } catch {
+      // Older Safari / HEIC files — fall back to HTMLImageElement
+      const url = URL.createObjectURL(file);
+      try {
+        const img = await new Promise((resolve, reject) => {
+          const im = new Image();
+          im.onload = () => resolve(im);
+          im.onerror = reject;
+          im.src = url;
+        });
+        bitmap = { width: img.naturalWidth, height: img.naturalHeight, _img: img, close() {} };
+      } catch {
+        URL.revokeObjectURL(url);
+        return file; // Can't decode (likely HEIC on non-Safari) — upload as-is
+      }
+    }
+
+    const { width, height } = bitmap;
+    if (!width || !height) {
+      try { bitmap.close?.(); } catch {}
+      return file;
+    }
+
+    // Render at a given maxDim and return a JPEG blob at given quality
+    async function renderAt(maxDim, quality) {
+      const scale = Math.min(1, maxDim / Math.max(width, height));
+      const outW = Math.round(width * scale);
+      const outH = Math.round(height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = outW;
+      canvas.height = outH;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+      ctx.drawImage(bitmap._img || bitmap, 0, 0, outW, outH);
+      const blob = await new Promise((resolve) =>
+        canvas.toBlob((b) => resolve(b), "image/jpeg", quality)
+      );
+      return blob ? { blob, outW, outH } : null;
+    }
+
+    // Try progressively smaller size + lower quality until we hit the target
+    const dimSteps = [startMaxDim, 1024, 800];
+    let best = null;
+    outer:
+    for (const dim of dimSteps) {
+      let q = startQuality;
+      while (q >= minQuality - 0.001) {
+        const r = await renderAt(dim, q);
+        if (r) {
+          best = { ...r, quality: q, dim };
+          if (r.blob.size <= targetBytes) break outer;
+        }
+        q = Math.round((q - 0.05) * 100) / 100;
+      }
+    }
+    try { bitmap.close?.(); } catch {}
+
+    if (!best || !best.blob) return file;
+
+    // Only use compressed if it's actually smaller than original
+    if (best.blob.size >= file.size) return file;
+
+    // Rename extension to .jpg since we're outputting JPEG
+    const dot = file.name.lastIndexOf(".");
+    const base = dot > 0 ? file.name.slice(0, dot) : file.name;
+    const newName = `${base}.jpg`;
+    const compressed = new File([best.blob], newName, {
+      type: "image/jpeg",
+      lastModified: Date.now(),
+    });
+    console.log(
+      `[Compress] ${file.name}: ${(file.size/1024).toFixed(0)}KB → ` +
+      `${(compressed.size/1024).toFixed(0)}KB ` +
+      `(${width}×${height} → ${best.outW}×${best.outH} @ Q${best.quality.toFixed(2)})`
+    );
+    return compressed;
+  } catch (e) {
+    console.warn("[Compress] failed, uploading as-is:", e);
+    return file;
+  }
+}
+
+function sanitizeCalibrationFilename(name) {
+  return String(name || "file")
+    .replace(/[^\w.\-]+/g, "_")
+    .replace(/_+/g, "_")
+    .slice(0, 120);
+}
+
+/**
+ * Upload one file to the calibration-files bucket under
+ * <installationId>/<timestamp>-<safe-name>. Returns the metadata
+ * object you store inside installations.calibration_files[].
+ */
+async function uploadCalibrationFile(installationId, file, uploadedBy) {
+  if (!installationId) throw new Error("Missing installation id for calibration upload.");
+  if (!file) throw new Error("No file provided.");
+  // Validate extension against ORIGINAL file (before compression swaps png→jpg)
+  const origExt = (file.name.split(".").pop() || "").toLowerCase();
+  if (!CALIBRATION_ALLOWED_EXT.has(origExt)) {
+    throw new Error(`File type .${origExt} not allowed. Use PDF / XLSX / XLS / ODS / CSV / PNG / JPG / WEBP / HEIC.`);
+  }
+  // v3.9.26 — Compress images before upload (non-images pass through)
+  const toUpload = await compressImageIfPossible(file, { maxDim: 1920, quality: 0.82 });
+  if (toUpload.size > CALIBRATION_MAX_BYTES) {
+    throw new Error(`File too large (${Math.round(toUpload.size/1048576)}MB) — limit is 25MB.`);
+  }
+  const safeName = sanitizeCalibrationFilename(toUpload.name);
+  const ts = Date.now();
+  const path = `${installationId}/${ts}-${safeName}`;
+
+  const { data, error } = await getDb().storage
+    .from(CALIBRATION_BUCKET)
+    .upload(path, toUpload, {
+      contentType: toUpload.type || undefined,
+      upsert: false,
+      cacheControl: "3600",
+    });
+  if (error) throw new Error("Upload failed: " + error.message);
+
+  const { data: pub } = getDb().storage
+    .from(CALIBRATION_BUCKET)
+    .getPublicUrl(data.path);
+
+  return {
+    name: toUpload.name,
+    path: data.path,
+    url: pub?.publicUrl || null,
+    size: toUpload.size,
+    type: toUpload.type || `application/octet-stream`,
+    originalName: file.name !== toUpload.name ? file.name : undefined,
+    originalSize: file.size !== toUpload.size ? file.size : undefined,
+    uploadedAt: new Date().toISOString(),
+    uploadedBy: uploadedBy || null,
+  };
+}
+
+/**
+ * Delete a calibration file from storage by its path.
+ * Safe to call even if the file is already gone.
+ */
+async function deleteCalibrationFile(path) {
+  if (!path) return;
+  const { error } = await getDb().storage
+    .from(CALIBRATION_BUCKET)
+    .remove([path]);
+  if (error && !/not.?found/i.test(error.message || "")) {
+    throw new Error("Delete failed: " + error.message);
+  }
+}
+
+/**
+ * Update just the calibration_files array for one installation —
+ * doesn't touch other columns, so no history mutation worries.
+ */
+async function updateInstallationCalibrationFiles(installationId, files) {
+  const { data, error } = await getDb()
+    .from("installations")
+    .update({
+      calibration_files: Array.isArray(files) ? files : [],
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", installationId)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return rowToInstallation(data);
+}
+
+/* ============================================================
+   VEHICLE PHOTOS — Supabase Storage helpers (v3.9.25)
+   ------------------------------------------------------------
+   Files live in the `vehicle-photos` bucket at path:
+     <installationId>/<timestamp>-<safe-filename>
+   Images only, 15 MB per file. Shape matches calibration file
+   metadata so the preview helpers can render them the same way.
+   ============================================================ */
+
+const VEHICLE_PHOTOS_BUCKET = "vehicle-photos";
+const VEHICLE_PHOTOS_MAX_BYTES = 15 * 1024 * 1024; // 15 MB per photo
+const VEHICLE_PHOTOS_ALLOWED_EXT = new Set([
+  "png", "jpg", "jpeg", "webp", "heic", "heif",
+]);
+
+async function uploadVehiclePhoto(installationId, file, uploadedBy) {
+  if (!installationId) throw new Error("Missing installation id for vehicle photo upload.");
+  if (!file) throw new Error("No file provided.");
+  const origExt = (file.name.split(".").pop() || "").toLowerCase();
+  if (!VEHICLE_PHOTOS_ALLOWED_EXT.has(origExt)) {
+    throw new Error(`File type .${origExt} not allowed. Only photos (PNG/JPG/WEBP/HEIC).`);
+  }
+  // v3.9.26 — Compress photo before upload (phone photos are usually 3-8MB)
+  const toUpload = await compressImageIfPossible(file, { maxDim: 1920, quality: 0.82 });
+  if (toUpload.size > VEHICLE_PHOTOS_MAX_BYTES) {
+    throw new Error(`Photo too large (${Math.round(toUpload.size/1048576)}MB) — limit is 15MB.`);
+  }
+  const safeName = sanitizeCalibrationFilename(toUpload.name);
+  const ts = Date.now();
+  const path = `${installationId}/${ts}-${safeName}`;
+
+  const { data, error } = await getDb().storage
+    .from(VEHICLE_PHOTOS_BUCKET)
+    .upload(path, toUpload, {
+      contentType: toUpload.type || undefined,
+      upsert: false,
+      cacheControl: "3600",
+    });
+  if (error) throw new Error("Upload failed: " + error.message);
+
+  const { data: pub } = getDb().storage
+    .from(VEHICLE_PHOTOS_BUCKET)
+    .getPublicUrl(data.path);
+
+  const outExt = (toUpload.name.split(".").pop() || "").toLowerCase();
+  return {
+    name: toUpload.name,
+    path: data.path,
+    url: pub?.publicUrl || null,
+    size: toUpload.size,
+    type: toUpload.type || `image/${outExt}`,
+    originalName: file.name !== toUpload.name ? file.name : undefined,
+    originalSize: file.size !== toUpload.size ? file.size : undefined,
+    uploadedAt: new Date().toISOString(),
+    uploadedBy: uploadedBy || null,
+  };
+}
+
+async function deleteVehiclePhoto(path) {
+  if (!path) return;
+  const { error } = await getDb().storage
+    .from(VEHICLE_PHOTOS_BUCKET)
+    .remove([path]);
+  if (error && !/not.?found/i.test(error.message || "")) {
+    throw new Error("Delete failed: " + error.message);
+  }
+}
+
+async function updateInstallationVehiclePhotos(installationId, photos) {
+  const { data, error } = await getDb()
+    .from("installations")
+    .update({
+      vehicle_photos: Array.isArray(photos) ? photos : [],
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", installationId)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return rowToInstallation(data);
+}
+
 async function deleteInstallation(installationId) {
   const { data, error } = await getDb()
     .from("installations")
@@ -980,6 +1308,7 @@ async function fetchUserPermissions() {
     displayName: row.display_name,
     isAdmin: !!row.is_admin,
     allowedPages: row.allowed_pages || [],
+    password: row.password || null, // v3.9.28 — DB-backed login
     updatedAt: row.updated_at,
     updatedBy: row.updated_by,
   }));
@@ -994,9 +1323,20 @@ async function upsertUserPermission(p) {
     updated_at: new Date().toISOString(),
     updated_by: p.updatedBy || null,
   };
+  // v3.9.28 — Only include password if it was explicitly set, so a perms-only
+  // update (checkbox toggle) does not wipe a user's password.
+  if (p.password !== undefined) row.password = p.password || null;
   const { error } = await getDb()
     .from("user_permissions")
     .upsert(row, { onConflict: "username" });
+  if (error) throw error;
+}
+
+async function deleteUserPermission(username) {
+  const { error } = await getDb()
+    .from("user_permissions")
+    .delete()
+    .eq("username", username);
   if (error) throw error;
 }
 
@@ -1425,6 +1765,18 @@ async function deleteRenewalDocument(id) {
     throw new Error("Delete had no effect. Permission denied.");
   }
   return true;
+}
+
+/* v3.9.14 — Admin: update installation / created date for a single renewal */
+async function updateRenewalCreatedDate(renewalId, newCreatedDate) {
+  const { data, error } = await getDb()
+    .from("renewals")
+    .update({ created_date: newCreatedDate })
+    .eq("id", renewalId)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return rowToRenewal(data);
 }
 
 /* v3.9.13 — Update free trial days for a single renewal */
