@@ -12066,12 +12066,14 @@ tr:hover td {
    rail cannot overlap the app content, even when .app is
    centered by max-width.
    ============================================================ */
+/* v3.9.34 — Rail size locked at 90px, body padding matches EXACTLY */
 @media (min-width: 1024px) {
   html { scrollbar-gutter: stable; }
   body {
-    padding-left: 72px !important;
+    padding-left: 90px !important;
+    box-sizing: border-box !important;
   }
-  /* v3.9.32 — Use full available width (rail takes 72px, rest is for content).
+  /* Use full available width (rail takes 90px, rest is for content).
      Cap only on ultra-wide monitors (>1920px) so tables stay readable. */
   .app {
     padding-left: 1.5rem !important;
@@ -12079,6 +12081,7 @@ tr:hover td {
     max-width: none !important;
     width: auto !important;
     margin: 0 !important;
+    box-sizing: border-box !important;
   }
 }
 @media (min-width: 1920px) {
@@ -12089,43 +12092,52 @@ tr:hover td {
 }
 @media (min-width: 1024px) {
 
-  /* Convert admin-nav from horizontal pills to vertical rail */
+  /* Convert admin-nav from horizontal pills to vertical rail — LOCKED 90px */
   .admin-nav {
     position: fixed !important;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: 72px;
+    top: 0 !important;
+    left: 0 !important;
+    bottom: 0 !important;
+    width: 90px !important;
+    max-width: 90px !important;
+    min-width: 90px !important;
+    box-sizing: border-box !important;
     flex-direction: column !important;
     flex-wrap: nowrap !important;
     gap: 0.25rem !important;
-    padding: 1rem 0.35rem 5rem 0.35rem !important;
-    background: var(--ray-rail-bg);
-    border-right: 1px solid var(--ray-rail-border);
-    box-shadow: 1px 0 3px rgba(15,23,42,0.03);
-    z-index: 50;
-    overflow-y: auto;
-    overflow-x: hidden;
+    padding: 1rem 0.3rem 5rem 0.3rem !important;
+    background: var(--ray-rail-bg) !important;
+    border-right: 1px solid var(--ray-rail-border) !important;
+    box-shadow: 1px 0 3px rgba(15,23,42,0.03) !important;
+    z-index: 50 !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
   }
 
-  /* Icon-only pills in the rail */
+  /* Icon-only pills in the rail — LOCKED 80px (fits within 90px rail) */
   .admin-nav .nav-pill {
-    width: 56px;
-    height: 56px;
-    padding: 0 !important;
-    border-radius: 12px !important;
+    width: 80px !important;
+    max-width: 80px !important;
+    min-width: 80px !important;
+    height: 60px !important;
+    padding: 0.3rem 0.2rem !important;
+    border-radius: 10px !important;
     border: 1px solid transparent !important;
     background: transparent !important;
     display: flex !important;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 2px;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 3px !important;
     color: var(--ray-text-muted) !important;
-    font-size: 0.6rem;
-    font-weight: 600;
-    transition: all 0.15s;
-    position: relative;
+    font-size: 0.6rem !important;
+    font-weight: 600 !important;
+    transition: all 0.15s !important;
+    position: relative !important;
+    overflow: hidden !important;
+    box-sizing: border-box !important;
+    flex-shrink: 0 !important;
+    flex-grow: 0 !important;
   }
   .admin-nav .nav-pill:hover {
     background: var(--ray-rail-active) !important;
@@ -12148,14 +12160,19 @@ tr:hover td {
     border-radius: 0 2px 2px 0;
   }
   .admin-nav .nav-icon {
-    font-size: 1.3rem;
-    line-height: 1;
+    font-size: 1.25rem !important;
+    line-height: 1 !important;
+    display: block !important;
   }
   .admin-nav .nav-label-short {
     display: block !important;
-    font-size: 0.62rem;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
+    font-size: 0.58rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.02em !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    max-width: 76px !important;
   }
   .admin-nav .nav-label-long {
     display: none !important;
@@ -12164,31 +12181,35 @@ tr:hover td {
   /* Secondary admin footer links → move into rail too */
   .admin-footer-nav {
     position: fixed !important;
-    left: 0;
-    bottom: 1rem;
-    width: 72px;
+    left: 0 !important;
+    bottom: 1rem !important;
+    width: 90px !important;
+    max-width: 90px !important;
+    box-sizing: border-box !important;
     display: flex !important;
     flex-direction: column !important;
     gap: 0.3rem !important;
-    padding: 0.4rem !important;
+    padding: 0.3rem !important;
     align-items: stretch !important;
-    z-index: 51;
+    z-index: 51 !important;
   }
   .admin-footer-nav .nav-link-sm {
-    width: 56px;
-    height: 48px;
+    width: 80px !important;
+    max-width: 80px !important;
+    height: 44px !important;
     padding: 0 !important;
-    border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0;
-    font-size: 0.6rem;
-    color: var(--ray-text-muted);
-    text-align: center;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    border-radius: 10px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 0 !important;
+    font-size: 0.55rem !important;
+    color: var(--ray-text-muted) !important;
+    text-align: center !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    box-sizing: border-box !important;
   }
   .admin-footer-nav .nav-link-sm:hover,
   .admin-footer-nav .nav-link-sm.active {
