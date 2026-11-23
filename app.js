@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.9.20";
+const APP_VERSION = "3.9.30";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -40,16 +40,48 @@ function userCanAccess(pageKey) {
 function landingPageFor(username) {
   const perms = getUserPerms(username);
   if (!perms) return "login";
-  if (username === "akash") return "akash-home";
-  if (username === "admin") return "dashboard";
+  if (username === "admin" || perms.isAdmin) return "dashboard";
+  // v3.9.28 — Field workers (akash + akash-like users) land on akash-home
+  if (isFieldWorker(username)) return "akash-home";
   // Other users: land on their first allowed page
   return (perms.allowedPages || [])[0] || "login";
 }
 
 function validateLogin(username, password) {
-  const user = USERS[username.toLowerCase().trim()];
+  const u = username.toLowerCase().trim();
+  // v3.9.28 — DB-backed users take precedence (admin can create new ones)
+  const dbUser = userPermissions[u];
+  if (dbUser && dbUser.password) {
+    if (dbUser.password === password) {
+      return dbUser.isAdmin ? "admin" : (u === "akash" ? "akash" : "field-worker");
+    }
+    return null;
+  }
+  // Fallback: hardcoded users dict (akash, admin, abhinav, collector)
+  const user = USERS[u];
   if (!user || user.password !== password) return null;
   return user.role;
+}
+
+/**
+ * v3.9.28 — Field-worker check: user has access to Akash's install flow
+ * (akash-home + install pages) but is NOT an admin.
+ * Used wherever we previously hardcoded `=== "akash"`.
+ */
+function isFieldWorker(username) {
+  if (!username) return false;
+  if (username === "admin") return false;
+  const perms = getUserPerms(username);
+  if (!perms) return false;
+  if (perms.isAdmin) return false;
+  const pages = perms.allowedPages || [];
+  return pages.includes("akash-home") || pages.includes("install");
+}
+
+function getAllKnownUsernames() {
+  // Union of hardcoded USERS + DB user_permissions
+  const set = new Set([...Object.keys(USERS), ...Object.keys(userPermissions)]);
+  return Array.from(set).sort();
 }
 
 let currentUser = null;
@@ -3098,6 +3130,90 @@ function bindPendingTaskHandlers() {
 function renderPendingTasksGroups_bindHelper() { bindPendingTaskHandlers(); }
 
 /* ============================================================
+   Circular progress ring for summary boxes (v3.9.30)
+   ------------------------------------------------------------
+   Usage:
+     renderStatRing(value, label, "summary-info", 0.63)
+   fillPercent 0..1 — 1 means full ring (for standalone counts)
+   ============================================================ */
+function renderStatRing(value, label, variant = "summary-info", fillPercent = 1) {
+  const R = 42;
+  const C = 2 * Math.PI * R; // circumference ≈ 263.9
+  const pct = Math.max(0, Math.min(1, Number(fillPercent) || 0));
+  const offset = C * (1 - pct);
+  return `
+    <div class="summary-box ${variant}">
+      <div class="stat-ring-wrap">
+        <svg viewBox="0 0 100 100">
+          <circle class="stat-ring-bg" cx="50" cy="50" r="${R}" fill="none" stroke-width="8"/>
+          <circle class="stat-ring-fg" cx="50" cy="50" r="${R}" fill="none" stroke-width="8"
+                  stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${offset.toFixed(1)}"/>
+        </svg>
+        <div class="stat-ring-num">${value}</div>
+      </div>
+      <span>${label}</span>
+    </div>
+  `;
+}
+
+/* ============================================================
+   Needs-calibration dashboard card (v3.9.22)
+   ------------------------------------------------------------
+   Lists installations that have BOTH sensor_no AND mac_id set
+   but zero calibration files uploaded. Admin clicks any row
+   to jump straight into Edit modal where Upload lives.
+   ============================================================ */
+function renderNeedsCalibrationCard(allInstalls) {
+  const needing = (allInstalls || []).filter(installationNeedsCalibration);
+  if (!needing.length) return "";
+
+  // Sort: oldest first so the most overdue show at top
+  needing.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  const rowsHtml = needing.map((i) => {
+    const days = Math.floor((Date.now() - new Date(i.createdAt).getTime()) / (24 * 60 * 60 * 1000));
+    const ageBadge = days >= 30
+      ? `<span class="badge badge-danger" title="Overdue">${days}d old</span>`
+      : days >= 7
+      ? `<span class="badge badge-warn">${days}d old</span>`
+      : `<span class="badge">${days}d</span>`;
+    return `
+      <div class="needs-calib-row" style="display:flex; align-items:center; gap:0.6rem; padding:0.5rem 0.6rem; background:white; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:0.4rem; flex-wrap:wrap;">
+        <strong style="min-width:90px; color:#0f172a;">${escapeHtml(i.vehicleNo)}</strong>
+        <span style="color:#64748b; font-size:0.85rem;">${escapeHtml(i.gpsModel || "—")}</span>
+        <span class="mono" style="color:#475569; font-size:0.82rem;">Sensor: ${escapeHtml(i.sensorNo)}</span>
+        <span class="mono" style="color:#475569; font-size:0.82rem;">MAC: ${escapeHtml(i.macId)}</span>
+        ${ageBadge}
+        <button type="button" class="btn btn-primary btn-sm needs-calib-upload-btn" data-id="${i.id}" style="margin-left:auto;">⬆ Upload calibration</button>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <section class="card needs-calib-card" style="border-left:4px solid #f59e0b;">
+      <div class="section-heading">
+        <div>
+          <h2>⚠️ Needs calibration files <span class="filter-count">(${needing.length})</span></h2>
+          <p class="section-subtitle">Ye installations me sensor + MAC configured hai lekin calibration PDF/Excel/photo upload nahi hui.</p>
+        </div>
+      </div>
+      <div class="needs-calib-list" style="max-height:340px; overflow-y:auto; margin-top:0.5rem;">
+        ${rowsHtml}
+      </div>
+    </section>
+  `;
+}
+
+function bindNeedsCalibrationHandlers() {
+  document.querySelectorAll(".needs-calib-upload-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.id;
+      if (id) openEditInstallation(id);
+    });
+  });
+}
+
+/* ============================================================
    Universal sortable table system (v3.7.0)
    Usage:
      1. In your <th>: renderSortHeader("Vehicle", "vehicleNo", "installsTable")
@@ -3328,10 +3444,12 @@ function handlePopState(e) {
     view = targetView;
     render();
   } else if (!targetView && currentUser) {
-    // No state — go to default landing
-    view = (typeof userCanAccessPage === "function" && currentUser !== "admin" && currentUser !== "akash")
-      ? null
-      : (currentUser === "akash" ? "akash-home" : "dashboard");
+    // v3.9.28 — Default landing: admin→dashboard, field worker→akash-home, others→null
+    view = (currentUser === "admin" || getUserPerms(currentUser)?.isAdmin)
+      ? "dashboard"
+      : isFieldWorker(currentUser)
+      ? "akash-home"
+      : null;
     if (view) {
       try { history.replaceState({ view }, "", "#" + encodeURIComponent(view)); } catch {}
       render();
@@ -3413,10 +3531,13 @@ function renderHeader(title, subtitle) {
             ? `<div class="header-actions">
                 ${liveBadgeMarkup()}
                 <span class="user-badge">${(() => {
-                  if (currentUser === "akash") return "👷 Akash";
                   if (currentUser === "admin") return "🛡️ Admin";
                   if (currentUser === "abhinav") return "📦 Abhinav";
-                  return `👤 ${escapeHtml(currentUser || "User")}`;
+                  // v3.9.28 — Show display name for field workers + fallbacks
+                  const perms = getUserPerms(currentUser);
+                  const dn = perms?.displayName ? perms.displayName.split(" ")[0] : currentUser;
+                  if (isFieldWorker(currentUser)) return `👷 ${escapeHtml(dn)}`;
+                  return `👤 ${escapeHtml(dn || currentUser || "User")}`;
                 })()}</span>
                 ${renderNotifBell()}
                 <button type="button" class="btn btn-outline btn-sm" id="logoutBtn">Logout</button>
@@ -3540,9 +3661,10 @@ function renderConnectionError(message) {
 }
 
 function renderAkashDeleted() {
+  // v3.9.28 — Each field worker sees THEIR OWN deletions
   const myDeletions = deletionLog.filter(
     (d) =>
-      d.deletedBy === "akash" &&
+      d.deletedBy === currentUser &&
       (d.entityType === "installation" || d.entityType === "maintenance")
   );
   const entries = myDeletions.map((d) => {
@@ -3673,10 +3795,13 @@ function renderAkashDeleted() {
 function renderAkashHome() {
   // Pre-warm camera in background — first scan opens instantly later
   prewarmCamera();
-  const myInstallations = loadInstallations().filter((inst) => inst.createdBy === "akash");
-  const myMaintenance = loadMaintenance().filter((record) => record.createdBy === "akash");
+  // v3.9.28 — Each field worker sees THEIR OWN entries
+  const myInstallations = loadInstallations().filter((inst) => inst.createdBy === currentUser);
+  const myMaintenance   = loadMaintenance().filter((record) => record.createdBy === currentUser);
+  const perms = getUserPerms(currentUser);
+  const displayName = perms?.displayName || (currentUser.charAt(0).toUpperCase() + currentUser.slice(1));
   app.innerHTML = `
-    ${renderHeader("Akash Portal", "Field work — installations & repairs")}
+    ${renderHeader(`${displayName.split(" ")[0]} Portal`, "Field work — installations & repairs")}
     <main class="main">
       <section class="card">
         <h2>What work are you doing?</h2>
@@ -3704,42 +3829,25 @@ function renderAkashHome() {
             <button type="button" class="btn btn-secondary btn-sm" id="refreshMine">↻ Refresh</button>
           </div>
         </div>
-        <div class="summary-grid">
-          <div class="summary-box summary-info">
-            <strong>${myInstallations.length}</strong>
-            <span>Installations</span>
-          </div>
-          <div class="summary-box summary-purple">
-            <strong>${myMaintenance.length}</strong>
-            <span>Repair work</span>
-          </div>
-          <div class="summary-box summary-ok">
-            <strong>${(() => {
-              const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-              const i = myInstallations.filter((x) => new Date(x.createdAt).getTime() >= weekAgo).length;
-              const r = myMaintenance.filter((x) => new Date(x.createdAt).getTime() >= weekAgo).length;
-              return i + r;
-            })()}</strong>
-            <span>This week</span>
-          </div>
-          <div class="summary-box summary-warn">
-            <strong>${(() => {
-              const today = new Date();
-              const month = today.getMonth();
-              const year = today.getFullYear();
-              const i = myInstallations.filter((x) => {
-                const d = new Date(x.createdAt);
-                return d.getMonth() === month && d.getFullYear() === year;
-              }).length;
-              const r = myMaintenance.filter((x) => {
-                const d = new Date(x.createdAt);
-                return d.getMonth() === month && d.getFullYear() === year;
-              }).length;
-              return i + r;
-            })()}</strong>
-            <span>This month</span>
-          </div>
-        </div>
+        ${(() => {
+          const total = myInstallations.length + myMaintenance.length;
+          const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+          const weekCount = myInstallations.filter((x) => new Date(x.createdAt).getTime() >= weekAgo).length
+            + myMaintenance.filter((x) => new Date(x.createdAt).getTime() >= weekAgo).length;
+          const today = new Date();
+          const month = today.getMonth();
+          const year = today.getFullYear();
+          const monthCount = myInstallations.filter((x) => { const d = new Date(x.createdAt); return d.getMonth() === month && d.getFullYear() === year; }).length
+            + myMaintenance.filter((x) => { const d = new Date(x.createdAt); return d.getMonth() === month && d.getFullYear() === year; }).length;
+          return `
+            <div class="summary-grid">
+              ${renderStatRing(myInstallations.length, "Installations", "summary-info", total ? myInstallations.length / total : 0)}
+              ${renderStatRing(myMaintenance.length, "Repair work", "summary-purple", total ? myMaintenance.length / total : 0)}
+              ${renderStatRing(weekCount, "This week", "summary-ok", total ? weekCount / total : 0)}
+              ${renderStatRing(monthCount, "This month", "summary-warn", total ? monthCount / total : 0)}
+            </div>
+          `;
+        })()}
         <div class="entry-list">
           ${(() => {
             // Deleted entries now have their own dedicated page (akash-deleted).
@@ -3756,6 +3864,8 @@ function renderAkashHome() {
                 sim: inst.simIccid || (inst.iccidHistory?.find?.((h) => h.active)?.value || ""),
                 mac: inst.macId,
                 sensor: inst.sensorNo,
+                calibrationFiles: Array.isArray(inst.calibrationFiles) ? inst.calibrationFiles : [],
+                vehiclePhotos:    Array.isArray(inst.vehiclePhotos)    ? inst.vehiclePhotos    : [],
               })),
               ...myMaintenance.map((record) => ({
                 id: record.id,
@@ -3877,6 +3987,28 @@ function renderAkashHome() {
                               <span class="tk-stat-value">${escapeHtml(entry.sensor)}</span>
                             </div>
                           ` : ""}
+                        </div>
+                      ` : ""}
+                      ${(entry.vehiclePhotos || []).length ? `
+                        <div class="tk-divider"></div>
+                        <div style="padding:0.3rem 0;">
+                          <div style="font-size:0.78rem; color:#64748b; margin-bottom:0.4rem; font-weight:600;">
+                            🚗 ${entry.vehiclePhotos.length} vehicle photo${entry.vehiclePhotos.length > 1 ? "s" : ""}
+                          </div>
+                          ${renderCalibrationPreviewHtml(entry.vehiclePhotos, { compact: true })}
+                        </div>
+                      ` : ""}
+                      ${(entry.calibrationFiles || []).length ? `
+                        <div class="tk-divider"></div>
+                        <div style="padding:0.3rem 0;">
+                          <div style="font-size:0.78rem; color:#64748b; margin-bottom:0.4rem; font-weight:600;">
+                            📎 ${entry.calibrationFiles.length} calibration file${entry.calibrationFiles.length > 1 ? "s" : ""}
+                          </div>
+                          ${renderCalibrationPreviewHtml(entry.calibrationFiles, { compact: true })}
+                        </div>
+                      ` : (entry.sensor && entry.mac && (String(entry.model || "").toUpperCase().includes("FMB") || String(entry.model || "").toUpperCase().includes("FMC"))) ? `
+                        <div class="tk-reason" style="background:#fef3c7; color:#92400e; border-color:#f59e0b; font-size:0.8rem;">
+                          ⚠️ Calibration file pending — Edit se upload karo
                         </div>
                       ` : ""}
                       <div class="tk-footer">
@@ -4027,6 +4159,39 @@ function openAkashEditInstallation(installId) {
         </div>
       </div>
     </div>
+
+    <!-- v3.9.25 — Vehicle photos section (always visible in edit, before calibration) -->
+    <div id="aiVehiclePhotosSection" style="margin-top: 0.8rem; padding: 0.8rem; background: var(--bg-soft, #f8fafc); border: 1px solid var(--border, #e2e8f0); border-radius: 8px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.5rem;">
+        <strong style="color: var(--text, #0f172a); font-size: 0.95rem;">🚗 Vehicle photos</strong>
+        <small style="color:#64748b;">2-3 photos recommended · max 15MB each</small>
+      </div>
+      <div id="aiVehiclePhotosList" class="calib-list" style="margin-bottom:0.5rem;"></div>
+      <div class="input-with-scan" style="gap:0.5rem;">
+        <input type="file" id="aiVehiclePhotosInput" multiple
+               accept="image/png,image/jpeg,image/webp,image/heic,image/heif"
+               style="flex:1; font-size:0.85rem;" />
+        <button type="button" class="btn btn-primary btn-sm" id="aiVehiclePhotosUpload">⬆ Upload</button>
+      </div>
+      <div id="aiVehiclePhotosStatus" style="margin-top:0.4rem; font-size:0.82rem; color:#64748b;"></div>
+    </div>
+
+    <!-- v3.9.21 — Calibration files section (shown only for FMB/FMC with sensor) -->
+    <div id="aiCalibrationSection" style="display:none; margin-top: 0.8rem; padding: 0.8rem; background: var(--bg-soft, #f8fafc); border: 1px solid var(--border, #e2e8f0); border-radius: 8px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.5rem;">
+        <strong style="color: var(--text, #0f172a); font-size: 0.95rem;">📎 Calibration files</strong>
+        <small style="color:#64748b;">PDF / Excel / ODS / CSV / Photo · max 25MB each</small>
+      </div>
+      <div id="aiCalibrationList" class="calib-list" style="margin-bottom:0.5rem;"></div>
+      <div class="input-with-scan" style="gap:0.5rem;">
+        <input type="file" id="aiCalibrationInput" multiple
+               accept=".pdf,.xlsx,.xls,.ods,.csv,image/png,image/jpeg,image/webp,image/heic,image/heif"
+               style="flex:1; font-size:0.85rem;" />
+        <button type="button" class="btn btn-primary btn-sm" id="aiCalibrationUpload">⬆ Upload</button>
+      </div>
+      <div id="aiCalibrationStatus" style="margin-top:0.4rem; font-size:0.82rem; color:#64748b;"></div>
+    </div>
+
     <label class="stock-restore-toggle">
       <input type="checkbox" id="aiRestoreStock" checked />
       <span class="stock-restore-text">
@@ -4044,6 +4209,215 @@ function openAkashEditInstallation(installId) {
     if (e.target === modalOverlay) closeModal();
   };
   modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+
+  // v3.9.25 — Vehicle photos UI (always visible in edit modal)
+  let vehiclePhotos = Array.isArray(inst.vehiclePhotos) ? [...inst.vehiclePhotos] : [];
+  const vpList   = modal.querySelector("#aiVehiclePhotosList");
+  const vpInput  = modal.querySelector("#aiVehiclePhotosInput");
+  const vpUpload = modal.querySelector("#aiVehiclePhotosUpload");
+  const vpStatus = modal.querySelector("#aiVehiclePhotosStatus");
+
+  function renderVehiclePhotosList() {
+    if (!vpList) return;
+    if (!vehiclePhotos.length) {
+      vpList.innerHTML = `<div style="color:#94a3b8; font-size:0.85rem; padding:0.4rem 0;">Koi photo nahi — 2-3 vehicle photos add karo.</div>`;
+      return;
+    }
+    vpList.innerHTML = `
+      <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(90px,1fr)); gap:0.4rem;">
+        ${vehiclePhotos.map((f, i) => `
+          <div style="position:relative; aspect-ratio:1; border:1px solid #e2e8f0; border-radius:6px; overflow:hidden; background:#f1f5f9;">
+            <a href="${escapeHtml(f.url || '#')}" target="_blank" rel="noopener" style="display:block; width:100%; height:100%;">
+              <img src="${escapeHtml(f.url || '')}" alt="${escapeHtml(f.name)}" loading="lazy"
+                   style="width:100%; height:100%; object-fit:cover; display:block;"
+                   onerror="this.style.display='none'; this.parentNode.innerHTML='<div style=\\'display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:1.5rem;\\'>🖼️</div>';">
+            </a>
+            <button type="button" class="vp-del" data-idx="${i}"
+                    title="Delete"
+                    style="position:absolute; top:3px; right:3px; background:rgba(239,68,68,0.9); color:white; border:none; border-radius:4px; width:22px; height:22px; cursor:pointer; font-size:0.7rem; display:flex; align-items:center; justify-content:center;">🗑</button>
+          </div>
+        `).join("")}
+      </div>
+    `;
+    vpList.querySelectorAll(".vp-del").forEach((btn) => {
+      btn.onclick = async () => {
+        const idx = parseInt(btn.dataset.idx, 10);
+        const file = vehiclePhotos[idx];
+        if (!file) return;
+        if (!confirm(`Delete "${file.name}"?`)) return;
+        if (vpStatus) vpStatus.textContent = `Deleting ${file.name}…`;
+        try {
+          if (file.path) await deleteVehiclePhoto(file.path);
+          vehiclePhotos.splice(idx, 1);
+          await updateInstallationVehiclePhotos(inst.id, vehiclePhotos);
+          inst.vehiclePhotos = [...vehiclePhotos];
+          renderVehiclePhotosList();
+          if (vpStatus) {
+            vpStatus.textContent = `✓ Deleted.`;
+            setTimeout(() => { vpStatus.textContent = ""; }, 2500);
+          }
+        } catch (e) {
+          if (vpStatus) vpStatus.textContent = `❌ ${e.message || "Delete failed"}`;
+        }
+      };
+    });
+  }
+  renderVehiclePhotosList();
+
+  vpUpload?.addEventListener("click", async () => {
+    const files = Array.from(vpInput.files || []);
+    if (!files.length) {
+      if (vpStatus) vpStatus.textContent = "Pehle photo choose karo.";
+      return;
+    }
+    vpUpload.disabled = true;
+    try {
+      for (const f of files) {
+        if (vpStatus) vpStatus.textContent = `Compressing & uploading ${f.name}…`;
+        try {
+          const meta = await uploadVehiclePhoto(inst.id, f, currentUser || "akash");
+          vehiclePhotos.push(meta);
+          await updateInstallationVehiclePhotos(inst.id, vehiclePhotos);
+          inst.vehiclePhotos = [...vehiclePhotos];
+          renderVehiclePhotosList();
+          // v3.9.27 — Show compression ratio with smart MB/KB units
+          if (vpStatus) {
+            if (meta.originalSize && meta.originalSize > meta.size) {
+              const pct = Math.round((1 - meta.size / meta.originalSize) * 100);
+              const origStr = meta.originalSize >= 1048576
+                ? `${(meta.originalSize/1048576).toFixed(1)}MB`
+                : `${Math.round(meta.originalSize/1024)}KB`;
+              const newStr = meta.size >= 1048576
+                ? `${(meta.size/1048576).toFixed(1)}MB`
+                : `${Math.round(meta.size/1024)}KB`;
+              vpStatus.textContent = `✓ ${f.name} · compressed ${origStr} → ${newStr} (-${pct}%).`;
+            } else {
+              vpStatus.textContent = `✓ ${f.name} uploaded.`;
+            }
+          }
+        } catch (e) {
+          if (vpStatus) vpStatus.textContent = `❌ ${f.name}: ${e.message || "upload failed"}`;
+        }
+      }
+      vpInput.value = "";
+    } finally {
+      vpUpload.disabled = false;
+      setTimeout(() => {
+        if (vpStatus && vpStatus.textContent.startsWith("✓")) vpStatus.textContent = "";
+      }, 4000);
+    }
+  });
+
+  // v3.9.21 — Calibration files UI (local state for this modal)
+  let calibrationFiles = Array.isArray(inst.calibrationFiles) ? [...inst.calibrationFiles] : [];
+  const calibSection = modal.querySelector("#aiCalibrationSection");
+  const calibList    = modal.querySelector("#aiCalibrationList");
+  const calibInput   = modal.querySelector("#aiCalibrationInput");
+  const calibUpload  = modal.querySelector("#aiCalibrationUpload");
+  const calibStatus  = modal.querySelector("#aiCalibrationStatus");
+
+  function fileIconFor(file) {
+    const ext = (file.name || "").split(".").pop().toLowerCase();
+    if (ext === "pdf") return "📄";
+    if (["xlsx","xls","ods","csv"].includes(ext)) return "📊";
+    if (["png","jpg","jpeg","webp","heic","heif"].includes(ext)) return "🖼️";
+    return "📎";
+  }
+  function fmtKB(n) {
+    if (!n) return "";
+    if (n < 1024) return `${n} B`;
+    if (n < 1048576) return `${(n/1024).toFixed(1)} KB`;
+    return `${(n/1048576).toFixed(1)} MB`;
+  }
+  function renderCalibList() {
+    if (!calibrationFiles.length) {
+      calibList.innerHTML = `<div style="color:#94a3b8; font-size:0.85rem; padding:0.4rem 0;">Koi file nahi — upload karne ke liye neeche choose karo.</div>`;
+      return;
+    }
+    calibList.innerHTML = calibrationFiles.map((f, i) => `
+      <div class="calib-row" style="display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.5rem; background:white; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:0.3rem;">
+        <span style="font-size:1.2rem;">${fileIconFor(f)}</span>
+        <a href="${escapeHtml(f.url || "#")}" target="_blank" rel="noopener" style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#2563eb; font-size:0.88rem; font-weight:500;">${escapeHtml(f.name)}</a>
+        <small style="color:#64748b; white-space:nowrap;">${fmtKB(f.size)}</small>
+        <button type="button" class="btn btn-outline btn-xs calib-del" data-idx="${i}" style="padding:0.2rem 0.5rem; font-size:0.75rem; color:#ef4444;">🗑</button>
+      </div>
+    `).join("");
+    calibList.querySelectorAll(".calib-del").forEach((btn) => {
+      btn.onclick = async () => {
+        const idx = parseInt(btn.dataset.idx, 10);
+        const file = calibrationFiles[idx];
+        if (!file) return;
+        if (!confirm(`Delete "${file.name}"?`)) return;
+        calibStatus.textContent = `Deleting ${file.name}…`;
+        try {
+          if (file.path) await deleteCalibrationFile(file.path);
+          calibrationFiles.splice(idx, 1);
+          await updateInstallationCalibrationFiles(inst.id, calibrationFiles);
+          // Update the local installation cache so re-opening shows the right state
+          inst.calibrationFiles = [...calibrationFiles];
+          renderCalibList();
+          calibStatus.textContent = `✓ Deleted.`;
+          setTimeout(() => { calibStatus.textContent = ""; }, 2500);
+        } catch (e) {
+          calibStatus.textContent = `❌ ${e.message || "Delete failed"}`;
+        }
+      };
+    });
+  }
+  function toggleCalibSection() {
+    // Visible only for FMB / FMC + sensor present
+    const modelUpper = (modal.querySelector("#aiModel")?.value || "").toUpperCase();
+    const sensorVal  = (modal.querySelector("#aiSensor")?.value || "").trim();
+    const isFmbOrFmc = modelUpper.includes("FMB") || modelUpper.includes("FMC");
+    const show = isFmbOrFmc && sensorVal.length > 0;
+    if (calibSection) calibSection.style.display = show ? "block" : "none";
+    if (show) renderCalibList();
+  }
+  toggleCalibSection();
+  modal.querySelector("#aiModel")?.addEventListener("input", toggleCalibSection);
+  modal.querySelector("#aiSensor")?.addEventListener("input", toggleCalibSection);
+
+  calibUpload?.addEventListener("click", async () => {
+    const files = Array.from(calibInput.files || []);
+    if (!files.length) {
+      calibStatus.textContent = "Pehle file choose karo.";
+      return;
+    }
+    calibUpload.disabled = true;
+    try {
+      for (const f of files) {
+        calibStatus.textContent = `Uploading ${f.name} (${fmtKB(f.size)})…`;
+        try {
+          const meta = await uploadCalibrationFile(inst.id, f, currentUser || "akash");
+          calibrationFiles.push(meta);
+          await updateInstallationCalibrationFiles(inst.id, calibrationFiles);
+          inst.calibrationFiles = [...calibrationFiles];
+          renderCalibList();
+          // v3.9.27 — Show compression ratio with smart MB/KB units
+          if (meta.originalSize && meta.originalSize > meta.size) {
+            const pct = Math.round((1 - meta.size / meta.originalSize) * 100);
+            const origStr = meta.originalSize >= 1048576
+              ? `${(meta.originalSize/1048576).toFixed(1)}MB`
+              : `${Math.round(meta.originalSize/1024)}KB`;
+            const newStr = meta.size >= 1048576
+              ? `${(meta.size/1048576).toFixed(1)}MB`
+              : `${Math.round(meta.size/1024)}KB`;
+            calibStatus.textContent = `✓ ${f.name} · compressed ${origStr} → ${newStr} (-${pct}%).`;
+          } else {
+            calibStatus.textContent = `✓ ${f.name} uploaded.`;
+          }
+        } catch (e) {
+          calibStatus.textContent = `❌ ${f.name}: ${e.message || "upload failed"}`;
+        }
+      }
+      calibInput.value = "";
+    } finally {
+      calibUpload.disabled = false;
+      setTimeout(() => {
+        if (calibStatus.textContent.startsWith("✓")) calibStatus.textContent = "";
+      }, 4000);
+    }
+  });
 
   // v3.9.18 — Scan handlers in Akash edit modal
   modal.querySelector('#aiScanImei')?.addEventListener('click', () => {
@@ -4103,8 +4477,18 @@ function openAkashEditInstallation(installId) {
           return;
         }
         const msgs = [];
-        if (parsed.sensorNo) { modal.querySelector("#aiSensor").value = parsed.sensorNo; msgs.push(`Sensor: ${parsed.sensorNo}`); }
-        if (parsed.macId)    { modal.querySelector("#aiMac").value    = parsed.macId;    msgs.push(`MAC: ${parsed.macId}`); }
+        if (parsed.sensorNo) {
+          const el = modal.querySelector("#aiSensor");
+          el.value = parsed.sensorNo;
+          el.dispatchEvent(new Event("input"));
+          msgs.push(`Sensor: ${parsed.sensorNo}`);
+        }
+        if (parsed.macId) {
+          const el = modal.querySelector("#aiMac");
+          el.value = parsed.macId;
+          el.dispatchEvent(new Event("input"));
+          msgs.push(`MAC: ${parsed.macId}`);
+        }
         showToast(`✓ ${msgs.join(" · ")}`);
       },
     });
@@ -5049,7 +5433,7 @@ function handleInstallSubmit(gpsType = "FMB") {
         simHistory: [simHistEntry],
         tasks: installTasks,
         createdAt: now,
-        createdBy: "akash",
+        createdBy: currentUser || "akash", // v3.9.28 — stamp with actual logged-in user
       };
 
       // Auto-register the SIM in the sims DB if it wasn't there (primary may
@@ -5623,7 +6007,7 @@ function renderRepairForm() {
         unknownSimSecondary,
       }),
       createdAt: now,
-      createdBy: "akash",
+      createdBy: currentUser || "akash", // v3.9.28 — stamp with actual logged-in user
     };
 
     try {
@@ -6148,6 +6532,43 @@ function openEditInstallation(id) {
       <div class="field"><label for="editSensor">Sensor No</label><input type="text" id="editSensor" value="${escapeHtml(inst.sensorNo || "")}" autocomplete="off" /></div>
       <div class="field"><label for="editMac">MAC ID</label><input type="text" id="editMac" value="${escapeHtml(inst.macId || "")}" autocomplete="off" /></div>
     </div>
+
+    <!-- v3.9.25 — Vehicle photos section (admin edit modal) -->
+    <div id="editVehiclePhotosSection" style="margin-top: 0.8rem; padding: 0.8rem; background: var(--bg-soft, #f8fafc); border: 1px solid var(--border, #e2e8f0); border-radius: 8px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.5rem;">
+        <strong style="color: var(--text, #0f172a); font-size: 0.95rem;">🚗 Vehicle photos</strong>
+        <small style="color:#64748b;">2-3 recommended · ≤15MB each</small>
+      </div>
+      <div id="editVehiclePhotosList" class="calib-list" style="margin-bottom:0.5rem;"></div>
+      <div class="input-with-scan" style="gap:0.5rem;">
+        <input type="file" id="editVehiclePhotosInput" multiple
+               accept="image/png,image/jpeg,image/webp,image/heic,image/heif"
+               style="flex:1; font-size:0.85rem;" />
+        <button type="button" class="btn btn-primary btn-sm" id="editVehiclePhotosUpload">⬆ Upload</button>
+      </div>
+      <div id="editVehiclePhotosStatus" style="margin-top:0.4rem; font-size:0.82rem; color:#64748b;"></div>
+    </div>
+
+    <!-- v3.9.21 — Calibration files (admin always sees, Akash only with FMB/FMC + sensor) -->
+    <div id="editCalibrationSection" style="margin-top: 0.8rem; padding: 0.8rem; background: var(--bg-soft, #f8fafc); border: 1px solid var(--border, #e2e8f0); border-radius: 8px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.5rem; flex-wrap:wrap;">
+        <strong style="color: var(--text, #0f172a); font-size: 0.95rem;">📎 Calibration files</strong>
+        <div style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
+          <button type="button" class="btn btn-outline btn-sm" id="editCalibrationRaw" data-id="${inst.id}" style="display:none;" title="Download original files as-is (no conversion)">📥 Raw</button>
+          <button type="button" class="btn btn-outline btn-sm" id="editCalibrationCombine" data-id="${inst.id}" style="display:none;" title="Merge PDFs/Excels into one Excel; images stay as images">📥 Combined</button>
+          <small style="color:#64748b;">PDF/XLSX/ODS/CSV/Photo · ≤25MB</small>
+        </div>
+      </div>
+      <div id="editCalibrationList" class="calib-list" style="margin-bottom:0.5rem;"></div>
+      <div class="input-with-scan" style="gap:0.5rem;">
+        <input type="file" id="editCalibrationInput" multiple
+               accept=".pdf,.xlsx,.xls,.ods,.csv,image/png,image/jpeg,image/webp,image/heic,image/heif"
+               style="flex:1; font-size:0.85rem;" />
+        <button type="button" class="btn btn-primary btn-sm" id="editCalibrationUpload">⬆ Upload</button>
+      </div>
+      <div id="editCalibrationStatus" style="margin-top:0.4rem; font-size:0.82rem; color:#64748b;"></div>
+    </div>
+
     <label class="stock-restore-toggle">
       <input type="checkbox" id="editRestoreStock" />
       <span class="stock-restore-text">
@@ -6256,6 +6677,241 @@ function openEditInstallation(id) {
       }
     }
   );
+
+  // v3.9.25 — Wire up vehicle photos section (admin edit modal)
+  let adminVehiclePhotos = Array.isArray(inst.vehiclePhotos) ? [...inst.vehiclePhotos] : [];
+  const adVpList   = document.getElementById("editVehiclePhotosList");
+  const adVpInput  = document.getElementById("editVehiclePhotosInput");
+  const adVpUpload = document.getElementById("editVehiclePhotosUpload");
+  const adVpStatus = document.getElementById("editVehiclePhotosStatus");
+
+  function renderAdVehiclePhotosList() {
+    if (!adVpList) return;
+    if (!adminVehiclePhotos.length) {
+      adVpList.innerHTML = `<div style="color:#94a3b8; font-size:0.85rem; padding:0.4rem 0;">No vehicle photos uploaded yet.</div>`;
+      return;
+    }
+    adVpList.innerHTML = `
+      <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(90px,1fr)); gap:0.4rem;">
+        ${adminVehiclePhotos.map((f, i) => `
+          <div style="position:relative; aspect-ratio:1; border:1px solid #e2e8f0; border-radius:6px; overflow:hidden; background:#f1f5f9;">
+            <a href="${escapeHtml(f.url || '#')}" target="_blank" rel="noopener" style="display:block; width:100%; height:100%;">
+              <img src="${escapeHtml(f.url || '')}" alt="${escapeHtml(f.name)}" loading="lazy"
+                   style="width:100%; height:100%; object-fit:cover; display:block;"
+                   onerror="this.style.display='none'; this.parentNode.innerHTML='<div style=\\'display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:1.5rem;\\'>🖼️</div>';">
+            </a>
+            <button type="button" class="ad-vp-del" data-idx="${i}"
+                    title="Delete"
+                    style="position:absolute; top:3px; right:3px; background:rgba(239,68,68,0.9); color:white; border:none; border-radius:4px; width:22px; height:22px; cursor:pointer; font-size:0.7rem; display:flex; align-items:center; justify-content:center;">🗑</button>
+          </div>
+        `).join("")}
+      </div>
+    `;
+    adVpList.querySelectorAll(".ad-vp-del").forEach((btn) => {
+      btn.onclick = async () => {
+        const idx = parseInt(btn.dataset.idx, 10);
+        const file = adminVehiclePhotos[idx];
+        if (!file) return;
+        if (!confirm(`Delete "${file.name}"?`)) return;
+        if (adVpStatus) adVpStatus.textContent = `Deleting ${file.name}…`;
+        try {
+          if (file.path) await deleteVehiclePhoto(file.path);
+          adminVehiclePhotos.splice(idx, 1);
+          await updateInstallationVehiclePhotos(inst.id, adminVehiclePhotos);
+          inst.vehiclePhotos = [...adminVehiclePhotos];
+          renderAdVehiclePhotosList();
+          if (adVpStatus) {
+            adVpStatus.textContent = `✓ Deleted.`;
+            setTimeout(() => { adVpStatus.textContent = ""; }, 2500);
+          }
+        } catch (e) {
+          if (adVpStatus) adVpStatus.textContent = `❌ ${e.message || "Delete failed"}`;
+        }
+      };
+    });
+  }
+  renderAdVehiclePhotosList();
+
+  adVpUpload?.addEventListener("click", async () => {
+    const files = Array.from(adVpInput.files || []);
+    if (!files.length) {
+      if (adVpStatus) adVpStatus.textContent = "Choose a photo first.";
+      return;
+    }
+    adVpUpload.disabled = true;
+    try {
+      for (const f of files) {
+        if (adVpStatus) adVpStatus.textContent = `Compressing & uploading ${f.name}…`;
+        try {
+          const meta = await uploadVehiclePhoto(inst.id, f, currentUser || "admin");
+          adminVehiclePhotos.push(meta);
+          await updateInstallationVehiclePhotos(inst.id, adminVehiclePhotos);
+          inst.vehiclePhotos = [...adminVehiclePhotos];
+          renderAdVehiclePhotosList();
+          if (adVpStatus) {
+            if (meta.originalSize && meta.originalSize > meta.size) {
+              const pct = Math.round((1 - meta.size / meta.originalSize) * 100);
+              const origStr = meta.originalSize >= 1048576
+                ? `${(meta.originalSize/1048576).toFixed(1)}MB`
+                : `${Math.round(meta.originalSize/1024)}KB`;
+              const newStr = meta.size >= 1048576
+                ? `${(meta.size/1048576).toFixed(1)}MB`
+                : `${Math.round(meta.size/1024)}KB`;
+              adVpStatus.textContent = `✓ ${f.name} · compressed ${origStr} → ${newStr} (-${pct}%).`;
+            } else {
+              adVpStatus.textContent = `✓ ${f.name} uploaded.`;
+            }
+          }
+        } catch (e) {
+          if (adVpStatus) adVpStatus.textContent = `❌ ${f.name}: ${e.message || "upload failed"}`;
+        }
+      }
+      adVpInput.value = "";
+    } finally {
+      adVpUpload.disabled = false;
+      setTimeout(() => {
+        if (adVpStatus && adVpStatus.textContent.startsWith("✓")) adVpStatus.textContent = "";
+      }, 4000);
+    }
+  });
+
+  // v3.9.21 — Wire up calibration files section (admin edit modal)
+  let adminCalibFiles = Array.isArray(inst.calibrationFiles) ? [...inst.calibrationFiles] : [];
+  const adCalibList    = document.getElementById("editCalibrationList");
+  const adCalibInput   = document.getElementById("editCalibrationInput");
+  const adCalibUpload  = document.getElementById("editCalibrationUpload");
+  const adCalibStatus  = document.getElementById("editCalibrationStatus");
+  const adCalibCombine = document.getElementById("editCalibrationCombine");
+  const adCalibRaw     = document.getElementById("editCalibrationRaw");
+
+  function adFileIcon(f) {
+    const ext = (f.name || "").split(".").pop().toLowerCase();
+    if (ext === "pdf") return "📄";
+    if (["xlsx","xls","ods","csv"].includes(ext)) return "📊";
+    if (["png","jpg","jpeg","webp","heic","heif"].includes(ext)) return "🖼️";
+    return "📎";
+  }
+  function adFmtKB(n) {
+    if (!n) return "";
+    if (n < 1024) return `${n} B`;
+    if (n < 1048576) return `${(n/1024).toFixed(1)} KB`;
+    return `${(n/1048576).toFixed(1)} MB`;
+  }
+  function updateAdCombineBtn() {
+    const show = adminCalibFiles.length > 0;
+    if (adCalibRaw)     adCalibRaw.style.display     = show ? "inline-flex" : "none";
+    if (adCalibCombine) adCalibCombine.style.display = show ? "inline-flex" : "none";
+    if (show && adCalibCombine) {
+      const hasDoc = adminCalibFiles.some((f) => !calibIsImage(f));
+      adCalibCombine.textContent = `📥 ${hasDoc ? "Combined" : "ZIP"}`;
+    }
+  }
+  function renderAdCalibList() {
+    if (!adCalibList) return;
+    updateAdCombineBtn();
+    if (!adminCalibFiles.length) {
+      adCalibList.innerHTML = `<div style="color:#94a3b8; font-size:0.85rem; padding:0.4rem 0;">No calibration files uploaded yet.</div>`;
+      return;
+    }
+    adCalibList.innerHTML = adminCalibFiles.map((f, i) => `
+      <div class="calib-row" style="display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.5rem; background:white; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:0.3rem;">
+        <span style="font-size:1.2rem;">${adFileIcon(f)}</span>
+        <a href="${escapeHtml(f.url || "#")}" target="_blank" rel="noopener" style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#2563eb; font-size:0.88rem; font-weight:500;">${escapeHtml(f.name)}</a>
+        <small style="color:#64748b; white-space:nowrap;">${adFmtKB(f.size)}</small>
+        <button type="button" class="btn btn-outline btn-xs calib-del" data-idx="${i}" style="padding:0.2rem 0.5rem; font-size:0.75rem; color:#ef4444;">🗑</button>
+      </div>
+    `).join("");
+    adCalibList.querySelectorAll(".calib-del").forEach((btn) => {
+      btn.onclick = async () => {
+        const idx = parseInt(btn.dataset.idx, 10);
+        const file = adminCalibFiles[idx];
+        if (!file) return;
+        if (!confirm(`Delete "${file.name}"?`)) return;
+        if (adCalibStatus) adCalibStatus.textContent = `Deleting ${file.name}…`;
+        try {
+          if (file.path) await deleteCalibrationFile(file.path);
+          adminCalibFiles.splice(idx, 1);
+          await updateInstallationCalibrationFiles(inst.id, adminCalibFiles);
+          inst.calibrationFiles = [...adminCalibFiles];
+          renderAdCalibList();
+          if (adCalibStatus) {
+            adCalibStatus.textContent = `✓ Deleted.`;
+            setTimeout(() => { adCalibStatus.textContent = ""; }, 2500);
+          }
+        } catch (e) {
+          if (adCalibStatus) adCalibStatus.textContent = `❌ ${e.message || "Delete failed"}`;
+        }
+      };
+    });
+  }
+  renderAdCalibList();
+
+  adCalibUpload?.addEventListener("click", async () => {
+    const files = Array.from(adCalibInput.files || []);
+    if (!files.length) {
+      if (adCalibStatus) adCalibStatus.textContent = "Choose a file first.";
+      return;
+    }
+    adCalibUpload.disabled = true;
+    try {
+      for (const f of files) {
+        if (adCalibStatus) adCalibStatus.textContent = `Uploading ${f.name} (${adFmtKB(f.size)})…`;
+        try {
+          const meta = await uploadCalibrationFile(inst.id, f, currentUser || "admin");
+          adminCalibFiles.push(meta);
+          await updateInstallationCalibrationFiles(inst.id, adminCalibFiles);
+          inst.calibrationFiles = [...adminCalibFiles];
+          renderAdCalibList();
+          if (adCalibStatus) {
+            if (meta.originalSize && meta.originalSize > meta.size) {
+              const pct = Math.round((1 - meta.size / meta.originalSize) * 100);
+              const origStr = meta.originalSize >= 1048576
+                ? `${(meta.originalSize/1048576).toFixed(1)}MB`
+                : `${Math.round(meta.originalSize/1024)}KB`;
+              const newStr = meta.size >= 1048576
+                ? `${(meta.size/1048576).toFixed(1)}MB`
+                : `${Math.round(meta.size/1024)}KB`;
+              adCalibStatus.textContent = `✓ ${f.name} · compressed ${origStr} → ${newStr} (-${pct}%).`;
+            } else {
+              adCalibStatus.textContent = `✓ ${f.name} uploaded.`;
+            }
+          }
+        } catch (e) {
+          if (adCalibStatus) adCalibStatus.textContent = `❌ ${f.name}: ${e.message || "upload failed"}`;
+        }
+      }
+      adCalibInput.value = "";
+    } finally {
+      adCalibUpload.disabled = false;
+      setTimeout(() => {
+        if (adCalibStatus && adCalibStatus.textContent.startsWith("✓")) adCalibStatus.textContent = "";
+      }, 4000);
+    }
+  });
+
+  // v3.9.23 — Download combined Excel (+ images in ZIP if any)
+  adCalibCombine?.addEventListener("click", async () => {
+    adCalibCombine.disabled = true;
+    adCalibCombine.textContent = "⏳ Combining…";
+    try {
+      await downloadCombinedCalibration(inst.id);
+    } finally {
+      adCalibCombine.disabled = false;
+      updateAdCombineBtn(); // restore label
+    }
+  });
+
+  // v3.9.24 — Download raw originals (no conversion)
+  adCalibRaw?.addEventListener("click", async () => {
+    adCalibRaw.disabled = true;
+    adCalibRaw.textContent = "⏳ Fetching…";
+    try {
+      await downloadRawCalibrationFiles(inst.id);
+    } finally {
+      adCalibRaw.disabled = false;
+      adCalibRaw.textContent = "📥 Raw";
+    }
+  });
 }
 
 /* ---------------- Pending actions card ---------------- */
@@ -6526,11 +7182,11 @@ function renderDeletionsPage() {
     <main class="main">
       ${renderAdminNav("deletions")}
       <div class="summary-grid">
-        <div class="summary-box summary-danger"><strong>${log.length}</strong><span>Total deleted</span></div>
-        <div class="summary-box summary-warn"><strong>${counts.installation}</strong><span>Installations</span></div>
-        <div class="summary-box summary-warn"><strong>${counts.maintenance}</strong><span>Repairs</span></div>
-        <div class="summary-box"><strong>${counts.stock_item}</strong><span>Stock items</span></div>
-        <div class="summary-box"><strong>${counts.sim + counts.category + counts.supplier + counts.other}</strong><span>Others</span></div>
+        ${renderStatRing(log.length, "Total deleted", "summary-danger", 1)}
+        ${renderStatRing(counts.installation, "Installations", "summary-warn", log.length ? counts.installation / log.length : 0)}
+        ${renderStatRing(counts.maintenance, "Repairs", "summary-warn", log.length ? counts.maintenance / log.length : 0)}
+        ${renderStatRing(counts.stock_item, "Stock items", "summary-info", log.length ? counts.stock_item / log.length : 0)}
+        ${renderStatRing(counts.sim + counts.category + counts.supplier + counts.other, "Others", "summary-info", log.length ? (counts.sim + counts.category + counts.supplier + counts.other) / log.length : 0)}
       </div>
       <section class="card">
         <div class="section-heading">
@@ -6750,11 +7406,54 @@ function openVehicleTimelineModal(installationId) {
     })
     .join("");
 
+  // v3.9.25 — Vehicle photos preview (if any) — shown above calibration
+  const vPhotos = Array.isArray(inst.vehiclePhotos) ? inst.vehiclePhotos : [];
+  const vPhotosHtml = vPhotos.length
+    ? `
+      <div class="tl-calib-section" style="margin-top:1rem; padding:0.8rem; background:var(--bg-soft,#f8fafc); border:1px solid var(--border,#e2e8f0); border-radius:8px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.6rem;">
+          <strong style="font-size:0.95rem; color:var(--text,#0f172a);">🚗 Vehicle photos (${vPhotos.length})</strong>
+          <small style="color:#64748b;">Tap any to open</small>
+        </div>
+        ${renderCalibrationPreviewHtml(vPhotos)}
+      </div>
+    `
+    : "";
+
+  // v3.9.22 — Calibration files preview inline (if any)
+  // v3.9.23 — Also show "Download combined Excel" button when docs present
+  const calibFiles = Array.isArray(inst.calibrationFiles) ? inst.calibrationFiles : [];
+  const hasAnyDoc = calibFiles.some((f) => !calibIsImage(f));
+  const calibHtml = calibFiles.length
+    ? `
+      <div class="tl-calib-section" style="margin-top:1rem; padding:0.8rem; background:var(--bg-soft,#f8fafc); border:1px solid var(--border,#e2e8f0); border-radius:8px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.6rem; flex-wrap:wrap;">
+          <strong style="font-size:0.95rem; color:var(--text,#0f172a);">📎 Calibration files (${calibFiles.length})</strong>
+          <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+            <button type="button" class="btn btn-outline btn-sm calib-raw-btn" data-id="${inst.id}" title="Download original files as-is (no conversion)">
+              📥 Download raw
+            </button>
+            <button type="button" class="btn btn-primary btn-sm calib-combine-btn" data-id="${inst.id}" title="Merge all PDF/Excel/ODS into one Excel; images stay as images">
+              📥 ${hasAnyDoc ? "Download combined" : "Download all as ZIP"}
+            </button>
+          </div>
+        </div>
+        ${renderCalibrationPreviewHtml(calibFiles)}
+      </div>
+    `
+    : (inst.sensorNo && inst.macId
+        ? `<div class="tl-calib-section" style="margin-top:1rem; padding:0.6rem 0.8rem; background:#fef3c7; border:1px solid #fbbf24; border-radius:8px; color:#92400e; font-size:0.85rem;">
+            ⚠️ Sensor + MAC configured but <strong>no calibration files</strong> uploaded. Upload via Edit.
+          </div>`
+        : "");
+
   modal.innerHTML = `
     <h3>📅 Timeline · <span class="mono">${escapeHtml(inst.vehicleNo)}</span></h3>
     <p class="modal-desc">${events.length} event${events.length === 1 ? "" : "s"} — newest at the bottom.</p>
     <div class="tl-modal-body">
       <ul class="tl-events">${eventsHtml || `<li class="muted">No events recorded.</li>`}</ul>
+      ${vPhotosHtml}
+      ${calibHtml}
     </div>
     <div class="modal-actions">
       <button type="button" class="btn btn-secondary" data-act="close">Close</button>
@@ -6768,6 +7467,33 @@ function openVehicleTimelineModal(installationId) {
   };
   modal.querySelector('[data-act="close"]').onclick = onClose;
   modalOverlay.onclick = (e) => { if (e.target === modalOverlay) onClose(); };
+  // v3.9.23 — Combine calibration button
+  modal.querySelector(".calib-combine-btn")?.addEventListener("click", (e) => {
+    const btn = e.currentTarget;
+    const id  = btn.dataset.id;
+    if (!id) return;
+    btn.disabled = true;
+    btn.textContent = "⏳ Combining…";
+    downloadCombinedCalibration(id).finally(() => {
+      btn.disabled = false;
+      const inst2 = loadInstallations().find((i) => i.id === id);
+      const files2 = Array.isArray(inst2?.calibrationFiles) ? inst2.calibrationFiles : [];
+      const hasDoc = files2.some((f) => !calibIsImage(f));
+      btn.textContent = `📥 ${hasDoc ? "Download combined" : "Download all as ZIP"}`;
+    });
+  });
+  // v3.9.24 — Raw download button
+  modal.querySelector(".calib-raw-btn")?.addEventListener("click", (e) => {
+    const btn = e.currentTarget;
+    const id  = btn.dataset.id;
+    if (!id) return;
+    btn.disabled = true;
+    btn.textContent = "⏳ Fetching…";
+    downloadRawCalibrationFiles(id).finally(() => {
+      btn.disabled = false;
+      btn.textContent = "📥 Download raw";
+    });
+  });
 }
 
 function renderTimeline() {
@@ -7664,14 +8390,15 @@ function renderInstallationsPage() {
     <main class="main">
       ${renderAdminNav("installations")}
       <div class="summary-grid">
-        <div class="summary-box summary-info"><strong>${allInstalls.length}</strong><span>Total installs</span></div>
-        <div class="summary-box summary-ok"><strong>${liveCount}</strong><span>🟢 Live</span></div>
-        <div class="summary-box summary-danger"><strong>${offlineCount}</strong><span>🔴 Offline</span></div>
-        <div class="summary-box summary-warn"><strong>${unknownCount}</strong><span>⚪ Unknown</span></div>
-        <div class="summary-box summary-purple"><strong>${recentInstalls}</strong><span>This week</span></div>
+        ${renderStatRing(allInstalls.length, "Total installs", "summary-info", 1)}
+        ${renderStatRing(liveCount, "🟢 Live", "summary-ok", allInstalls.length ? liveCount / allInstalls.length : 0)}
+        ${renderStatRing(offlineCount, "🔴 Offline", "summary-danger", allInstalls.length ? offlineCount / allInstalls.length : 0)}
+        ${renderStatRing(unknownCount, "⚪ Unknown", "summary-warn", allInstalls.length ? unknownCount / allInstalls.length : 0)}
+        ${renderStatRing(recentInstalls, "This week", "summary-purple", allInstalls.length ? recentInstalls / allInstalls.length : 0)}
       </div>
 
       ${renderPendingTasksGroups(allInstalls)}
+      ${renderNeedsCalibrationCard(allInstalls)}
 
       <section class="card">
         <div class="section-heading">
@@ -7734,6 +8461,14 @@ function renderInstallationsPage() {
                           : liveStatus === "offline"
                           ? `<span class="live-badge live-no">🔴 Offline</span>`
                           : `<span class="live-badge live-unknown">⚪ Unknown</span>`;
+                        // v3.9.22 — Calibration status indicator
+                        // v3.9.23 — If files exist, make it a 1-click download combined
+                        const calibCount = (i.calibrationFiles || []).length;
+                        const calibIndicator = calibCount > 0
+                          ? `<button type="button" class="badge badge-ok calib-quick-dl" data-id="${i.id}" title="Download combined (PDF/Excel/ODS merged into one Excel + images)" style="cursor:pointer; border:none;">📎 ${calibCount} ⬇</button>`
+                          : installationNeedsCalibration(i)
+                          ? `<span class="badge badge-warn" title="Sensor + MAC configured but no calibration uploaded">📎 pending</span>`
+                          : "";
                         return `
                 <tr>
                   <td class="mono">${escapeHtml(currentImei)}</td>
@@ -7741,7 +8476,7 @@ function renderInstallationsPage() {
                   <td><strong>${escapeHtml(i.vehicleNo)}</strong></td>
                   <td class="mono">${escapeHtml(secondary || "—")}</td>
                   <td class="mono">${escapeHtml(resolvedPrimary || "—")} ${pendingPill}</td>
-                  <td class="mono">${escapeHtml(i.sensorNo || "—")}</td>
+                  <td class="mono">${escapeHtml(i.sensorNo || "—")} ${calibIndicator}</td>
                   <td class="mono">${escapeHtml(i.macId || "—")}</td>
                   <td>${liveBadge}</td>
                   <td class="date-cell">${escapeHtml(formatDateTime(i.createdAt))}</td>
@@ -7826,6 +8561,19 @@ function renderInstallationsPage() {
                           ` : ""}
                         </div>
                       ` : ""}
+                      ${(i.calibrationFiles || []).length ? `
+                        <div class="tk-divider"></div>
+                        <div style="padding:0.3rem 0;">
+                          <div style="font-size:0.78rem; color:#64748b; margin-bottom:0.4rem; font-weight:600;">
+                            📎 ${i.calibrationFiles.length} calibration file${i.calibrationFiles.length > 1 ? "s" : ""}
+                          </div>
+                          ${renderCalibrationPreviewHtml(i.calibrationFiles, { compact: true })}
+                        </div>
+                      ` : (installationNeedsCalibration(i) ? `
+                        <div class="tk-reason" style="background:#fef3c7; color:#92400e; border-color:#f59e0b; font-size:0.8rem;">
+                          ⚠️ Calibration file pending
+                        </div>
+                      ` : "")}
                       ${looksIccid ? `<div class="tk-reason" style="background: #fef3c7; color: #92400e; border-color: #f59e0b;">⏳ Primary number pending — set via Repair Progress</div>` : ""}
                       <div class="tk-footer">
                         <div class="tk-footer-row">
@@ -7896,6 +8644,23 @@ function renderInstallationsPage() {
   app.querySelectorAll(".live-toggle-btn").forEach((btn) => {
     btn.addEventListener("click", () => openLiveStatusModal(btn.dataset.id));
   });
+  // v3.9.22 — Needs-calibration card → opens Edit modal straight to Upload
+  bindNeedsCalibrationHandlers();
+  // v3.9.23 — Quick-download combined calibration from table row
+  app.querySelectorAll(".calib-quick-dl").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      if (!id) return;
+      btn.disabled = true;
+      const txt = btn.textContent;
+      btn.textContent = "⏳";
+      downloadCombinedCalibration(id).finally(() => {
+        btn.disabled = false;
+        btn.textContent = txt;
+      });
+    });
+  });
 }
 
 /* ---------------- Page 3: Repair Work ---------------- */
@@ -7942,10 +8707,10 @@ function renderRepairsPage() {
     <main class="main">
       ${renderAdminNav("repairs")}
       <div class="summary-grid">
-        <div class="summary-box summary-info"><strong>${allMaint.length}</strong><span>Total repairs</span></div>
-        <div class="summary-box summary-ok"><strong>${recentRepairs}</strong><span>This week</span></div>
-        <div class="summary-box summary-purple"><strong>${simChangeCount}</strong><span>SIM changes</span></div>
-        <div class="summary-box summary-warn"><strong>${deviceChangeCount}</strong><span>Device changes</span></div>
+        ${renderStatRing(allMaint.length, "Total repairs", "summary-info", 1)}
+        ${renderStatRing(recentRepairs, "This week", "summary-ok", allMaint.length ? recentRepairs / allMaint.length : 0)}
+        ${renderStatRing(simChangeCount, "SIM changes", "summary-purple", allMaint.length ? simChangeCount / allMaint.length : 0)}
+        ${renderStatRing(deviceChangeCount, "Device changes", "summary-warn", allMaint.length ? deviceChangeCount / allMaint.length : 0)}
       </div>
       <section class="card">
         <div class="section-heading">
@@ -9354,11 +10119,11 @@ function _OLD_renderSimDb_v321() {
     <main class="main">
       ${renderAdminNav("sim-db")}
       <div class="summary-grid">
-        <div class="summary-box summary-info"><strong>${totalSims}</strong><span>Total SIMs</span></div>
-        <div class="summary-box summary-purple"><strong>${inUseCount}</strong><span>In use</span></div>
-        <div class="summary-box summary-ok"><strong>${availableCount}</strong><span>Available</span></div>
-        <div class="summary-box ${pendingPrimary ? "summary-warn" : ""}"><strong>${pendingPrimary}</strong><span>Pending primary</span></div>
-        ${swappedCount ? `<div class="summary-box summary-danger"><strong>${swappedCount}</strong><span>Looks swapped</span></div>` : ""}
+        ${renderStatRing(totalSims, "Total SIMs", "summary-info", 1)}
+        ${renderStatRing(inUseCount, "In use", "summary-purple", totalSims ? inUseCount / totalSims : 0)}
+        ${renderStatRing(availableCount, "Available", "summary-ok", totalSims ? availableCount / totalSims : 0)}
+        ${renderStatRing(pendingPrimary, "Pending primary", pendingPrimary ? "summary-warn" : "summary-info", totalSims ? pendingPrimary / totalSims : 0)}
+        ${swappedCount ? renderStatRing(swappedCount, "Looks swapped", "summary-danger", totalSims ? swappedCount / totalSims : 0) : ""}
       </div>
       ${swappedCount ? `
         <div class="swap-banner">
@@ -9656,6 +10421,380 @@ function getCategoryOptions() {
 const STOCK_UNITS = ["pcs", "set", "box", "meters", "kg", "liters", "pack"];
 
 // Detect what kind of identifiers this category needs.
+/* ============================================================
+   Calibration file helpers (v3.9.22)
+   ------------------------------------------------------------
+   Shared across detail views + dashboard card so a single
+   style stays consistent everywhere.
+   ============================================================ */
+
+function calibFileExt(f) {
+  return String((f && f.name) || "").split(".").pop().toLowerCase();
+}
+function calibIsImage(f) {
+  const ext = calibFileExt(f);
+  return ["png", "jpg", "jpeg", "webp", "heic", "heif"].includes(ext) ||
+         String(f.type || "").startsWith("image/");
+}
+function calibFileIcon(f) {
+  const ext = calibFileExt(f);
+  if (ext === "pdf") return "📄";
+  if (ext === "csv") return "📋";
+  if (["xlsx", "xls", "ods"].includes(ext)) return "📊";
+  if (calibIsImage(f)) return "🖼️";
+  return "📎";
+}
+function calibFmtKB(n) {
+  if (!n) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
+}
+
+/**
+ * Inline preview HTML for calibration files — images show as
+ * thumbnails in a grid, PDFs / Excel / ODS as a list of cards
+ * with download links. Pass {compact:true} for a tighter version
+ * suitable for tooltips / small cards.
+ */
+function renderCalibrationPreviewHtml(files, options = {}) {
+  const list = Array.isArray(files) ? files : [];
+  if (!list.length) return "";
+
+  const compact = !!options.compact;
+  const images = list.filter(calibIsImage);
+  const others = list.filter((f) => !calibIsImage(f));
+
+  const imgsHtml = images.length
+    ? `<div class="calib-thumb-grid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(${compact ? 70 : 100}px,1fr)); gap:0.5rem; margin-bottom:${others.length ? "0.6rem" : "0"};">
+        ${images.map((f) => `
+          <a href="${escapeHtml(f.url || "#")}" target="_blank" rel="noopener"
+             title="${escapeHtml(f.name)} · ${calibFmtKB(f.size)}"
+             style="display:block; aspect-ratio:1; border:1px solid #e2e8f0; border-radius:6px; overflow:hidden; background:#f1f5f9; position:relative;">
+            <img src="${escapeHtml(f.url || "")}" alt="${escapeHtml(f.name)}" loading="lazy"
+                 style="width:100%; height:100%; object-fit:cover; display:block;"
+                 onerror="this.style.display='none'; this.parentNode.innerHTML='<div style=\\'display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:1.5rem;\\'>🖼️</div>';">
+          </a>`).join("")}
+      </div>`
+    : "";
+
+  const othersHtml = others.length
+    ? `<div class="calib-file-list">
+        ${others.map((f) => `
+          <div class="calib-row" style="display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.5rem; background:white; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:0.3rem;">
+            <span style="font-size:1.2rem;">${calibFileIcon(f)}</span>
+            <a href="${escapeHtml(f.url || "#")}" target="_blank" rel="noopener"
+               style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#2563eb; font-size:0.88rem; font-weight:500;">
+              ${escapeHtml(f.name)}
+            </a>
+            <small style="color:#64748b; white-space:nowrap;">${calibFmtKB(f.size)}</small>
+          </div>`).join("")}
+      </div>`
+    : "";
+
+  return imgsHtml + othersHtml;
+}
+
+/* ============================================================
+   Combine calibration docs → one Excel + keep images as images
+   (v3.9.23)
+   ------------------------------------------------------------
+   For a given installation:
+     - Fetch all calibration files from storage
+     - PDF → extract text with pdf.js, one sheet per PDF (pages
+       separated by a blank row + page header)
+     - ODS / XLSX / XLS / CSV → read with SheetJS, add every
+       sheet as its own sheet in the combined workbook (names
+       prefixed with source filename)
+     - Images → kept as original files
+   If there is only ONE doc and NO images: download that one
+   combined XLSX directly. Otherwise a ZIP is returned with:
+     - calibration-<vehicle>.xlsx (combined data)
+     - images/<original names>
+   ============================================================ */
+
+async function fetchCalibrationFileBlob(file) {
+  // f.url is the public URL from Supabase storage
+  const url = file.url;
+  if (!url) throw new Error(`No URL for ${file.name}`);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Fetch failed (${res.status}) for ${file.name}`);
+  return await res.blob();
+}
+
+function safeSheetName(base, idx) {
+  // Excel sheet name: max 31 chars, no / \ ? * [ ]
+  let name = String(base || "Sheet").replace(/[\\/?*\[\]:]/g, "_").slice(0, 25);
+  if (idx !== undefined && idx !== null) name = `${name}_${idx}`;
+  return name.slice(0, 31) || `Sheet${idx || 1}`;
+}
+
+async function extractPdfToRows(blob, fileName) {
+  if (!window.pdfjsLib) {
+    throw new Error("PDF.js not loaded — refresh and try again.");
+  }
+  const buf = await blob.arrayBuffer();
+  const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+  // One sheet per PDF; each page gets a header row + text lines
+  const rows = [[`PDF: ${fileName}`], [`Pages: ${pdf.numPages}`], []];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    // Group text items by approximate Y coordinate so each visual line is one row
+    const lines = new Map();
+    for (const it of content.items) {
+      const y = Math.round(it.transform[5]);
+      if (!lines.has(y)) lines.set(y, []);
+      lines.get(y).push({ x: it.transform[4], str: it.str });
+    }
+    // Sort top→bottom (PDF y grows upward), left→right
+    const sortedY = [...lines.keys()].sort((a, b) => b - a);
+    rows.push([`--- Page ${p} ---`]);
+    for (const y of sortedY) {
+      const cells = lines.get(y).sort((a, b) => a.x - b.x).map((c) => c.str);
+      // If cells look tab-separated (many short strings), keep as columns;
+      // otherwise join into one cell per line.
+      if (cells.length >= 2 && cells.every((c) => c.length <= 40)) {
+        rows.push(cells);
+      } else {
+        rows.push([cells.join(" ")]);
+      }
+    }
+    rows.push([]); // blank row between pages
+  }
+  return rows;
+}
+
+async function workbookFromSpreadsheet(blob) {
+  const buf = await blob.arrayBuffer();
+  // SheetJS auto-detects xlsx / xls / ods / csv from magic bytes
+  return XLSX.read(buf, { type: "array" });
+}
+
+/**
+ * Build the combined workbook object + collect image blobs.
+ * Returns { workbook, images:[{name, blob}], docCount, imageCount }
+ */
+async function buildCombinedCalibrationBundle(inst) {
+  const files = Array.isArray(inst.calibrationFiles) ? inst.calibrationFiles : [];
+  if (!files.length) throw new Error("No calibration files to combine.");
+
+  const combined = XLSX.utils.book_new();
+  const images = [];
+  let docCount = 0;
+  let imageCount = 0;
+
+  // Add a cover sheet so admin knows what this bundle is
+  const cover = XLSX.utils.aoa_to_sheet([
+    ["Combined Calibration Report"],
+    [],
+    ["Vehicle No",    inst.vehicleNo || ""],
+    ["GPS Model",     inst.gpsModel || ""],
+    ["IMEI",          getCurrentImei(inst) || ""],
+    ["Sensor No",     inst.sensorNo || ""],
+    ["MAC ID",        inst.macId || ""],
+    ["Installed",     inst.createdAt || ""],
+    ["Total files",   files.length],
+    ["Generated at",  new Date().toISOString()],
+    [],
+    ["Files included:"],
+    ...files.map((f) => [f.name, calibFmtKB(f.size), f.uploadedAt || "", f.uploadedBy || ""]),
+  ]);
+  XLSX.utils.book_append_sheet(combined, cover, "Overview");
+
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    try {
+      const blob = await fetchCalibrationFileBlob(f);
+      const ext = calibFileExt(f);
+      if (calibIsImage(f)) {
+        images.push({ name: f.name, blob });
+        imageCount++;
+      } else if (ext === "pdf") {
+        const rows = await extractPdfToRows(blob, f.name);
+        const ws = XLSX.utils.aoa_to_sheet(rows);
+        XLSX.utils.book_append_sheet(combined, ws, safeSheetName(`PDF_${i + 1}`));
+        docCount++;
+      } else if (["xlsx", "xls", "ods", "csv"].includes(ext)) {
+        const wb = await workbookFromSpreadsheet(blob);
+        for (const sn of wb.SheetNames) {
+          const ws = wb.Sheets[sn];
+          const label = safeSheetName(`${ext.toUpperCase()}${i + 1}_${sn}`);
+          XLSX.utils.book_append_sheet(combined, ws, label);
+        }
+        docCount++;
+      } else {
+        // Unknown — treat as binary, skip in workbook but store in zip
+        images.push({ name: f.name, blob });
+      }
+    } catch (e) {
+      console.warn("Combine skip for", f.name, e);
+      // Record failure in cover sheet via extra row
+      XLSX.utils.sheet_add_aoa(cover, [[`⚠ Skipped: ${f.name}`, (e && e.message) || "error"]], { origin: -1 });
+    }
+  }
+
+  return { workbook: combined, images, docCount, imageCount };
+}
+
+/**
+ * Produce a Blob + filename for the user: either single XLSX
+ * (when there are no images) or a ZIP containing xlsx + images/.
+ */
+async function buildCombinedCalibrationBlob(inst) {
+  const bundle = await buildCombinedCalibrationBundle(inst);
+  const vehicleSafe = String(inst.vehicleNo || "install").replace(/[^\w.\-]+/g, "_");
+  const xlsxName = `calibration-${vehicleSafe}.xlsx`;
+  const xlsxArray = XLSX.write(bundle.workbook, { type: "array", bookType: "xlsx" });
+  const xlsxBlob = new Blob([xlsxArray], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+
+  if (!bundle.images.length) {
+    return { blob: xlsxBlob, filename: xlsxName, mode: "xlsx-only", ...bundle };
+  }
+
+  // ZIP with combined xlsx + images/
+  if (!window.JSZip) throw new Error("JSZip not loaded — refresh and try again.");
+  const zip = new window.JSZip();
+  zip.file(xlsxName, xlsxBlob);
+  const imgsFolder = zip.folder("images");
+  const seenNames = new Set();
+  for (const img of bundle.images) {
+    let name = img.name;
+    // Avoid name clashes
+    let n = 1;
+    while (seenNames.has(name)) {
+      const dot = img.name.lastIndexOf(".");
+      name = dot > 0
+        ? img.name.slice(0, dot) + `_${n}` + img.name.slice(dot)
+        : `${img.name}_${n}`;
+      n++;
+    }
+    seenNames.add(name);
+    imgsFolder.file(name, img.blob);
+  }
+  const zipBlob = await zip.generateAsync({ type: "blob" });
+  return {
+    blob: zipBlob,
+    filename: `calibration-${vehicleSafe}.zip`,
+    mode: "zip",
+    ...bundle,
+  };
+}
+
+function downloadBlobAsFile(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    try { URL.revokeObjectURL(url); } catch {}
+    a.remove();
+  }, 1500);
+}
+
+/**
+ * Raw download — original files as-is, no conversion.
+ * Single file → direct download of that file in original format.
+ * Multiple files → ZIP with every original file.
+ */
+async function downloadRawCalibrationFiles(installationId) {
+  const inst = loadInstallations().find((i) => i.id === installationId);
+  if (!inst) { showToast("Installation not found.", true); return; }
+  const files = Array.isArray(inst.calibrationFiles) ? inst.calibrationFiles : [];
+  if (!files.length) { showToast("No calibration files to download.", true); return; }
+
+  const vehicleSafe = String(inst.vehicleNo || "install").replace(/[^\w.\-]+/g, "_");
+  showToast(`Downloading ${files.length} raw file${files.length > 1 ? "s" : ""}…`);
+
+  try {
+    // Single file → direct download, no ZIP
+    if (files.length === 1) {
+      const blob = await fetchCalibrationFileBlob(files[0]);
+      downloadBlobAsFile(blob, files[0].name);
+      showToast(`✓ Downloaded raw file: ${files[0].name}`);
+      return;
+    }
+
+    // Multiple files → ZIP with originals
+    if (!window.JSZip) throw new Error("JSZip not loaded — refresh and try again.");
+    const zip = new window.JSZip();
+    const seenNames = new Set();
+    let ok = 0;
+    let failed = 0;
+    for (const f of files) {
+      try {
+        const blob = await fetchCalibrationFileBlob(f);
+        // Avoid name clashes
+        let name = f.name;
+        let n = 1;
+        while (seenNames.has(name)) {
+          const dot = f.name.lastIndexOf(".");
+          name = dot > 0
+            ? f.name.slice(0, dot) + `_${n}` + f.name.slice(dot)
+            : `${f.name}_${n}`;
+          n++;
+        }
+        seenNames.add(name);
+        zip.file(name, blob);
+        ok++;
+      } catch (e) {
+        console.warn("Raw download skip for", f.name, e);
+        failed++;
+      }
+    }
+    if (!ok) throw new Error("Could not fetch any files from storage.");
+    const zipBlob = await zip.generateAsync({ type: "blob" });
+    downloadBlobAsFile(zipBlob, `calibration-raw-${vehicleSafe}.zip`);
+    showToast(failed
+      ? `✓ Raw ZIP downloaded (${ok} ok, ${failed} skipped).`
+      : `✓ Raw ZIP downloaded (${ok} files).`);
+  } catch (e) {
+    console.error("Raw download failed:", e);
+    showToast(`❌ Raw download failed: ${e.message || e}`, true);
+  }
+}
+
+/**
+ * Public entry — call from any UI button. Shows a progress toast
+ * and triggers download when done.
+ */
+async function downloadCombinedCalibration(installationId) {
+  const inst = loadInstallations().find((i) => i.id === installationId);
+  if (!inst) { showToast("Installation not found.", true); return; }
+  const files = Array.isArray(inst.calibrationFiles) ? inst.calibrationFiles : [];
+  if (!files.length) { showToast("No calibration files to download.", true); return; }
+  showToast(`Combining ${files.length} file${files.length > 1 ? "s" : ""}…`);
+  try {
+    const result = await buildCombinedCalibrationBlob(inst);
+    downloadBlobAsFile(result.blob, result.filename);
+    if (result.mode === "zip") {
+      showToast(`✓ Downloaded ZIP: ${result.docCount} doc${result.docCount !== 1 ? "s" : ""} merged + ${result.imageCount} image${result.imageCount !== 1 ? "s" : ""}.`);
+    } else {
+      showToast(`✓ Downloaded combined Excel (${result.docCount} doc${result.docCount !== 1 ? "s" : ""} merged).`);
+    }
+  } catch (e) {
+    console.error("Combine failed:", e);
+    showToast(`❌ Combine failed: ${e.message || e}`, true);
+  }
+}
+
+/**
+ * True when this installation has sensor + MAC configured but
+ * no calibration files uploaded yet. Used by the dashboard card.
+ */
+function installationNeedsCalibration(inst) {
+  if (!inst) return false;
+  const sensor = (inst.sensorNo || "").trim();
+  const mac    = (inst.macId    || "").trim();
+  if (!sensor || !mac) return false;
+  const files = Array.isArray(inst.calibrationFiles) ? inst.calibrationFiles : [];
+  return files.length === 0;
+}
+
 function categoryKind(category) {
   if (!category) return "generic";
   const c = String(category).toUpperCase();
@@ -11985,12 +13124,56 @@ function renderUserAccessPage() {
     { key: "repair",        label: "🔧 Report Repair (form)" },
   ];
 
-  const allUsers = Object.keys(USERS);
+  // v3.9.28 — Union of hardcoded USERS + DB user_permissions
+  const allUsers = getAllKnownUsernames();
+  // Get akash's default pages as the template for new field-worker users
+  const akashPerms = getUserPerms("akash") || DEFAULT_PERMISSIONS.akash;
+  const akashPages = akashPerms?.allowedPages || ["akash-home","akash-deleted","install","repair"];
+  const hardcodedSet = new Set(Object.keys(USERS));
 
   app.innerHTML = `
     ${renderHeader("User Access", "Manage who can see which pages")}
     <main class="main">
       ${renderAdminNav("user-access")}
+
+      <!-- v3.9.28 — Create new user (Akash-like) -->
+      <section class="card" style="border-left: 4px solid #22c55e;">
+        <div class="section-heading">
+          <h2>➕ Create new user (Akash-like)</h2>
+          <p class="section-subtitle">Akash jaisa naya field worker banao. Default: Akash ke saare pages checked honge — admin uncheck karke kam access de sakta hai.</p>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:0.6rem; margin-bottom:0.8rem;">
+          <div class="field">
+            <label for="nuUsername">Username</label>
+            <input type="text" id="nuUsername" autocomplete="off" placeholder="e.g. rahul" />
+            <small class="field-hint">Lowercase, no spaces. Used for login.</small>
+          </div>
+          <div class="field">
+            <label for="nuDisplayName">Display name</label>
+            <input type="text" id="nuDisplayName" autocomplete="off" placeholder="e.g. Rahul (Field Worker)" />
+          </div>
+          <div class="field">
+            <label for="nuPassword">Password</label>
+            <input type="text" id="nuPassword" autocomplete="off" placeholder="min 4 chars" />
+          </div>
+        </div>
+        <div style="background:#f1f5f9; border:1px solid #e2e8f0; border-radius:8px; padding:0.6rem; margin-bottom:0.8rem;">
+          <div style="font-weight:600; margin-bottom:0.4rem; font-size:0.9rem;">Access to give (Akash ke access same by default):</div>
+          <div class="user-access-pages">
+            ${allPages.map((p) => `
+              <label class="user-access-page-check">
+                <input type="checkbox" class="nu-page" data-page="${escapeHtml(p.key)}" ${akashPages.includes(p.key) ? "checked" : ""} />
+                <span>${escapeHtml(p.label)}</span>
+              </label>
+            `).join("")}
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-primary" id="createUserBtn">✓ Create user</button>
+        </div>
+        <div id="createUserStatus" style="margin-top:0.5rem; font-size:0.85rem; color:#64748b;"></div>
+      </section>
+
       <section class="card">
         <div class="section-heading">
           <h2>👥 User Access Control</h2>
@@ -12000,14 +13183,20 @@ function renderUserAccessPage() {
         ${allUsers.map((username) => {
           const perms = getUserPerms(username) || { displayName: username, isAdmin: false, allowedPages: [] };
           const isAdminUser = perms.isAdmin || username === "admin";
+          const isHardcoded = hardcodedSet.has(username);
+          const isDbUser    = !isHardcoded;
           return `
             <div class="user-access-card">
               <div class="user-access-head">
                 <div>
                   <h3 class="user-access-name">${escapeHtml(perms.displayName || username)}</h3>
                   <code class="user-access-username">@${escapeHtml(username)}</code>
+                  ${isDbUser ? `<span class="badge" style="margin-left:0.4rem; font-size:0.72rem;">custom</span>` : ""}
                 </div>
-                ${isAdminUser ? `<span class="badge badge-ok">🛡️ Admin (full access)</span>` : ""}
+                <div style="display:flex; align-items:center; gap:0.5rem;">
+                  ${isAdminUser ? `<span class="badge badge-ok">🛡️ Admin (full access)</span>` : ""}
+                  ${isDbUser && !isAdminUser ? `<button type="button" class="btn btn-danger btn-sm delete-user-btn" data-user="${escapeHtml(username)}" title="Delete this user permanently">🗑 Delete</button>` : ""}
+                </div>
               </div>
               ${isAdminUser ? "" : `
                 <div class="user-access-pages">
@@ -12029,7 +13218,7 @@ function renderUserAccessPage() {
   bindLogout();
   bindAdminNav();
 
-  document.querySelectorAll(".user-access-page-check input").forEach((cb) => {
+  document.querySelectorAll(".user-access-page-check input[data-user]").forEach((cb) => {
     cb.addEventListener("change", async (e) => {
       const username = e.target.dataset.user;
       const page = e.target.dataset.page;
@@ -12046,11 +13235,82 @@ function renderUserAccessPage() {
       };
       try {
         await upsertUserPermission(newPerms);
-        userPermissions[username] = newPerms;
+        // Preserve password on existing record
+        userPermissions[username] = { ...userPermissions[username], ...newPerms };
         showToast(`✓ ${username} access updated`);
       } catch (err) {
         showToast(err.message || "Failed to save. Run user-permissions-migration.sql first.", true);
         e.target.checked = !e.target.checked; // revert
+      }
+    });
+  });
+
+  // v3.9.28 — Create new user
+  const createBtn = document.getElementById("createUserBtn");
+  const createStatus = document.getElementById("createUserStatus");
+  createBtn?.addEventListener("click", async () => {
+    const usernameRaw = document.getElementById("nuUsername").value.toLowerCase().trim();
+    const displayName = document.getElementById("nuDisplayName").value.trim();
+    const password    = document.getElementById("nuPassword").value;
+    const selected = Array.from(document.querySelectorAll(".nu-page:checked")).map((cb) => cb.dataset.page);
+
+    // Validation
+    if (!/^[a-z0-9_]{3,20}$/.test(usernameRaw)) {
+      createStatus.textContent = "❌ Username: 3-20 chars, only a-z, 0-9, _";
+      return;
+    }
+    if (!password || password.length < 4) {
+      createStatus.textContent = "❌ Password: min 4 characters";
+      return;
+    }
+    if (!selected.length) {
+      createStatus.textContent = "❌ Kam se kam ek page access do";
+      return;
+    }
+    // Clash check
+    if (getUserPerms(usernameRaw) || USERS[usernameRaw]) {
+      createStatus.textContent = `❌ "${usernameRaw}" already exists`;
+      return;
+    }
+
+    createBtn.disabled = true;
+    createStatus.textContent = `Creating ${usernameRaw}…`;
+    try {
+      const newPerms = {
+        username: usernameRaw,
+        displayName: displayName || `${usernameRaw.charAt(0).toUpperCase()}${usernameRaw.slice(1)} (Field Worker)`,
+        isAdmin: false,
+        allowedPages: selected,
+        password, // v3.9.28 — DB-backed login
+        updatedBy: currentUser,
+      };
+      await upsertUserPermission(newPerms);
+      userPermissions[usernameRaw] = newPerms;
+      createStatus.textContent = `✓ User "${usernameRaw}" created. Password: ${password}`;
+      showToast(`✓ User "${usernameRaw}" created`);
+      setTimeout(() => render(), 1200); // Re-render to show in list
+    } catch (err) {
+      createStatus.textContent = `❌ ${err.message || "Failed. Run user-passwords-migration.sql first."}`;
+    } finally {
+      createBtn.disabled = false;
+    }
+  });
+
+  // v3.9.28 — Delete DB-created user
+  document.querySelectorAll(".delete-user-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const username = btn.dataset.user;
+      if (!username) return;
+      if (!confirm(`Delete user "${username}" permanently? Their installations & repairs will stay in DB but credited to their deleted account.`)) return;
+      btn.disabled = true;
+      try {
+        await deleteUserPermission(username);
+        delete userPermissions[username];
+        showToast(`✓ User "${username}" deleted`);
+        render();
+      } catch (err) {
+        btn.disabled = false;
+        showToast(err.message || "Delete failed", true);
       }
     });
   });
@@ -13178,6 +14438,17 @@ async function initApp() {
   setupPullToRefresh();
   try {
     initDb();
+    // v3.9.28 — Preload user_permissions so DB-created users can log in.
+    // Non-fatal: if the table / column is missing, we fall back to hardcoded.
+    fetchUserPermissions()
+      .then((perms) => {
+        userPermissions = { ...DEFAULT_PERMISSIONS };
+        perms.forEach((p) => { userPermissions[p.username] = p; });
+      })
+      .catch((err) => {
+        console.warn("[initApp] user_permissions preload failed:", err?.message || err);
+        userPermissions = { ...DEFAULT_PERMISSIONS };
+      });
     render();
     // Pre-warm BarcodeDetector + enumerate cameras silently on first user gesture
     // This makes the FIRST scan instant instead of having to wait for camera init
