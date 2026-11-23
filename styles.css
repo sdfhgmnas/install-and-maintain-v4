@@ -12061,13 +12061,33 @@ tr:hover td {
 
 /* ============================================================
    DESKTOP (≥1024px): Left icon rail navigation (xray style)
+   ------------------------------------------------------------
+   v3.9.31 — push the whole body right by the rail width so the
+   rail cannot overlap the app content, even when .app is
+   centered by max-width.
    ============================================================ */
 @media (min-width: 1024px) {
-  /* Shift the whole app right to make space for 72px rail */
-  .app {
-    padding-left: 88px !important;
-    max-width: 1320px;
+  html { scrollbar-gutter: stable; }
+  body {
+    padding-left: 72px !important;
   }
+  /* v3.9.32 — Use full available width (rail takes 72px, rest is for content).
+     Cap only on ultra-wide monitors (>1920px) so tables stay readable. */
+  .app {
+    padding-left: 1.5rem !important;
+    padding-right: 1.5rem !important;
+    max-width: none !important;
+    width: auto !important;
+    margin: 0 !important;
+  }
+}
+@media (min-width: 1920px) {
+  .app {
+    max-width: 1800px !important;
+    margin: 0 auto !important;
+  }
+}
+@media (min-width: 1024px) {
 
   /* Convert admin-nav from horizontal pills to vertical rail */
   .admin-nav {
@@ -12079,7 +12099,7 @@ tr:hover td {
     flex-direction: column !important;
     flex-wrap: nowrap !important;
     gap: 0.25rem !important;
-    padding: 1rem 0.4rem !important;
+    padding: 1rem 0.35rem 5rem 0.35rem !important;
     background: var(--ray-rail-bg);
     border-right: 1px solid var(--ray-rail-border);
     box-shadow: 1px 0 3px rgba(15,23,42,0.03);
