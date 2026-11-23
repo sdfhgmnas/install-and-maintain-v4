@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.9.30";
+const APP_VERSION = "3.9.33";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -15041,6 +15041,10 @@ function renderRenewalsPage() {
   document.getElementById("bulkCreatePIBtn")?.addEventListener("click", () => openDocGenerationModal("PI"));
   document.getElementById("bulkCreateInvoiceBtn")?.addEventListener("click", () => openDocGenerationModal("INV"));
   document.getElementById("bulkCreateReceiptBtn")?.addEventListener("click", () => openDocGenerationModal("R"));
+  // v3.9.33 — Bulk Pay Year
+  document.getElementById("bulkPayYearBtn")?.addEventListener("click", () => {
+    openBulkPaymentModal(decorated);
+  });
 
   // Click doc badges in SIM column to re-open doc
   app.querySelectorAll(".reopen-doc-badge").forEach((badge) => {
@@ -15948,6 +15952,7 @@ function renderBulkActionBar(decorated) {
         <strong>${count}</strong> selected
       </div>
       <div class="bulk-actions">
+        <button type="button" class="btn btn-primary btn-sm btn-critical" id="bulkPayYearBtn">💰 Pay Year (bulk)</button>
         <button type="button" class="btn btn-primary btn-sm" id="bulkCreatePIBtn">📝 Create PI</button>
         <button type="button" class="btn btn-primary btn-sm" id="bulkCreateInvoiceBtn">🧾 Tax Invoice</button>
         <button type="button" class="btn btn-primary btn-sm" id="bulkCreateReceiptBtn">🧾 Receipt</button>
@@ -15955,6 +15960,230 @@ function renderBulkActionBar(decorated) {
       </div>
     </div>
   `;
+}
+
+/* ============================================================
+   v3.9.33 — Bulk "Pay Year" modal
+   ------------------------------------------------------------
+   Admin / collector selects multiple vehicles and records
+   payment for each in one go. Common fields (collection date,
+   mode, notes) filled once. Amount can be:
+     - Same for all (quick mode), or
+     - Per-vehicle (table mode) with each vehicle's current year
+   ============================================================ */
+function openBulkPaymentModal(decorated) {
+  const selectedList = Array.from(selectedVehicleIds)
+    .map((id) => decorated.find((d) => d.renewal.id === id))
+    .filter(Boolean);
+  if (!selectedList.length) {
+    showToast("No vehicles selected.", true);
+    return;
+  }
+  const perms = getUserPerms(currentUser);
+  const isAdmin = perms?.isAdmin;
+  const today = formatYMD(new Date());
+
+  // Build per-vehicle rows with their current pay-year
+  const rows = selectedList.map((d) => {
+    const r = d.renewal;
+    const status = computeRenewalStatus(r);
+    const payYear = status.currentYear; // which year to pay next
+    const lastDueDate = computeLastDueDateForYear(r, payYear);
+    const nextExpiry = addDaysLocal(lastDueDate, RENEWAL_CYCLE_DAYS);
+    return {
+      r,
+      payYear,
+      lastDueDate,
+      nextExpiry,
+      isOverdue: status.status === "overdue",
+      daysOverdue: status.daysOverdue || 0,
+    };
+  });
+
+  const anyOverdue = rows.filter((x) => x.isOverdue).length;
+
+  modal.innerHTML = `
+    <h3>💰 Bulk Pay Year — ${rows.length} vehicle${rows.length > 1 ? "s" : ""}</h3>
+    <p class="modal-desc">
+      Ek saath ${rows.length} vehicle${rows.length > 1 ? "s" : ""} ki renewal payment record karo.
+      ${anyOverdue ? `<span style="color:#dc2626;"><strong>${anyOverdue} overdue</strong></span> · ` : ""}
+      Common fields neeche fill karo, phir per-vehicle amount set karo.
+    </p>
+
+    <div class="bulk-pay-common" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:0.8rem; margin-bottom:0.8rem;">
+      <strong style="display:block; margin-bottom:0.5rem; font-size:0.9rem;">Common fields (sab vehicles ke liye same):</strong>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:0.5rem;">
+        <div class="form-row">
+          <label>Collection Date <span class="required">*</span></label>
+          <input type="date" id="bpDate" value="${today}" />
+        </div>
+        <div class="form-row">
+          <label>Default Amount (₹) <span class="required">*</span></label>
+          <input type="number" id="bpDefaultAmt" placeholder="e.g. 500" min="0" step="1" />
+          <small style="color:#64748b;">Apply karne pe sab rows fill</small>
+        </div>
+        <div class="form-row">
+          <label>Payment Mode <span class="required">*</span></label>
+          <select id="bpMode">
+            <option value="cash">💵 Cash</option>
+            <option value="upi">📱 UPI</option>
+            <option value="bank">🏦 Bank Transfer</option>
+            <option value="cheque">📄 Cheque</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="form-row" style="grid-column: 1 / -1;">
+          <label>Notes (optional)</label>
+          <input type="text" id="bpNotes" placeholder="e.g. Nov batch collection" />
+        </div>
+      </div>
+      <button type="button" class="btn btn-outline btn-sm" id="bpApplyDefault" style="margin-top:0.5rem;">⤵ Apply default amount to all rows</button>
+    </div>
+
+    ${isAdmin ? `
+      <div style="margin-bottom:0.8rem;">
+        <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+          <input type="checkbox" id="bpAnchorFromPayment" />
+          <span style="font-size:0.88rem;">🔒 Admin: Set next cycle from <strong>payment date</strong> (not last due date — grants extra days)</span>
+        </label>
+      </div>
+    ` : ""}
+
+    <div class="table-wrap" style="max-height:340px; overflow-y:auto; border-radius:8px;">
+      <table style="font-size:0.85rem;">
+        <thead>
+          <tr>
+            <th>Vehicle</th>
+            <th>Year</th>
+            <th>Last Due</th>
+            <th>Amount (₹)</th>
+            <th>Receipt No</th>
+          </tr>
+        </thead>
+        <tbody id="bpRowsBody">
+          ${rows.map((x, i) => `
+            <tr data-idx="${i}">
+              <td>
+                <strong>${escapeHtml(x.r.plateNumber)}</strong>
+                ${x.isOverdue ? `<br><small style="color:#dc2626;">overdue ${x.daysOverdue}d</small>` : ""}
+                <br><small style="color:#64748b;">${escapeHtml(x.r.company || "—")}</small>
+              </td>
+              <td><strong>Y${x.payYear}</strong></td>
+              <td><small>${formatDateIndian(x.lastDueDate)}</small></td>
+              <td><input type="number" class="bp-amt" min="0" step="1" style="width:90px; padding:0.3rem;" placeholder="0" /></td>
+              <td><input type="text" class="bp-receipt" style="width:120px; padding:0.3rem;" placeholder="optional" /></td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div id="bpStatus" style="margin-top:0.5rem; font-size:0.85rem; color:#64748b;"></div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-act="cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="bpSubmit">💾 Save ${rows.length} Payment${rows.length > 1 ? "s" : ""}</button>
+    </div>
+  `;
+  modalOverlay.classList.remove("hidden");
+  modal.querySelector('[data-act="cancel"]').onclick = closeModal;
+  modalOverlay.onclick = (e) => { if (e.target === modalOverlay) closeModal(); };
+
+  // Apply default amount to all rows
+  document.getElementById("bpApplyDefault")?.addEventListener("click", () => {
+    const def = document.getElementById("bpDefaultAmt").value;
+    if (!def || Number(def) <= 0) {
+      showToast("Pehle default amount daalo.", true);
+      return;
+    }
+    document.querySelectorAll(".bp-amt").forEach((inp) => { inp.value = def; });
+  });
+
+  // Submit — process all vehicles in sequence
+  document.getElementById("bpSubmit")?.addEventListener("click", async () => {
+    const date = document.getElementById("bpDate").value;
+    const mode = document.getElementById("bpMode").value;
+    const notes = document.getElementById("bpNotes").value.trim();
+    const anchorFromPayment = isAdmin && document.getElementById("bpAnchorFromPayment")?.checked;
+    const statusEl = document.getElementById("bpStatus");
+
+    if (!date || !mode) {
+      statusEl.textContent = "❌ Date aur Mode required hain.";
+      return;
+    }
+
+    // Collect per-row amounts and receipts
+    const tasks = [];
+    document.querySelectorAll("#bpRowsBody tr").forEach((tr) => {
+      const idx = parseInt(tr.dataset.idx, 10);
+      const amt = parseFloat(tr.querySelector(".bp-amt").value);
+      const receipt = tr.querySelector(".bp-receipt").value.trim();
+      if (amt > 0) {
+        tasks.push({ row: rows[idx], amount: amt, receipt });
+      }
+    });
+
+    if (!tasks.length) {
+      statusEl.textContent = "❌ Kam se kam ek vehicle me amount daalo (ya Apply Default dabao).";
+      return;
+    }
+
+    const btn = document.getElementById("bpSubmit");
+    btn.disabled = true;
+    let okCount = 0, failCount = 0;
+    const failures = [];
+
+    for (let i = 0; i < tasks.length; i++) {
+      const t = tasks[i];
+      statusEl.textContent = `Processing ${i + 1}/${tasks.length}: ${t.row.r.plateNumber}…`;
+      try {
+        const current = renewals.find((x) => x.id === t.row.r.id);
+        if (!current) throw new Error("Not found");
+        const payments = [...(current.payments || [])];
+
+        const cycleStartDate = anchorFromPayment ? new Date(date) : new Date(t.row.lastDueDate);
+        cycleStartDate.setHours(0, 0, 0, 0);
+        const cycleEndDate = addDaysLocal(cycleStartDate, RENEWAL_CYCLE_DAYS);
+
+        payments.push({
+          year: t.row.payYear,
+          date,
+          amount: t.amount,
+          receiptNumber: t.receipt || null,
+          mode,
+          notes: notes || null,
+          collectedBy: currentUser,
+          collectedAt: new Date().toISOString(),
+          cycleAnchorMode: anchorFromPayment ? "payment_date" : "last_due_date",
+          cycleStartDate: formatYMD(cycleStartDate),
+          cycleEndDate: formatYMD(cycleEndDate),
+          approvedBy: anchorFromPayment ? currentUser : null,
+          bulkBatch: true,
+        });
+        const updated = await updateRenewalPayments(t.row.r.id, payments);
+        const idx = renewals.findIndex((x) => x.id === t.row.r.id);
+        if (idx >= 0) renewals[idx] = updated;
+        okCount++;
+      } catch (err) {
+        failCount++;
+        failures.push(`${t.row.r.plateNumber}: ${err.message || "fail"}`);
+        console.warn("Bulk pay fail:", t.row.r.plateNumber, err);
+      }
+    }
+
+    btn.disabled = false;
+    if (failCount === 0) {
+      closeModal();
+      selectedVehicleIds.clear();
+      showToast(`✓ ${okCount} payment${okCount > 1 ? "s" : ""} saved.`);
+      render();
+    } else {
+      statusEl.innerHTML = `✓ ${okCount} saved, ❌ ${failCount} failed:<br><small style="color:#dc2626;">${failures.slice(0, 3).join("<br>")}${failures.length > 3 ? `<br>+${failures.length - 3} more` : ""}</small>`;
+      // Keep modal open so user can see failures
+      if (okCount > 0) {
+        setTimeout(() => render(), 500); // refresh underneath
+      }
+    }
+  });
 }
 
 /* ============================================================
