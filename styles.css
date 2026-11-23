@@ -12060,158 +12060,286 @@ tr:hover td {
 }
 
 /* ============================================================
-   DESKTOP (≥1024px): Left icon rail navigation (xray style)
+   v3.9.36 — xray-style SIDE RAIL (desktop ≥1024px)
    ------------------------------------------------------------
-   v3.9.31 — push the whole body right by the rail width so the
-   rail cannot overlap the app content, even when .app is
-   centered by max-width.
+   ROOT-CAUSE FIX: .main had `animation: rise ... both`, whose
+   final keyframe leaves a `transform` on .main. Any transformed
+   ancestor becomes the containing block for position:fixed
+   children — so the rail was pinned INSIDE .main (below the
+   header, over the first card) instead of to the viewport.
+   We swap that animation for an opacity-only fade.
    ============================================================ */
-/* v3.9.35 — Icon-only rail (56px) with HOVER-EXPAND to 220px overlay.
-   Body padding matches COLLAPSED rail width so nothing else shifts.
-   Rail header is also fixed at top (goes above app content). */
+@keyframes mainFadeOnly { from { opacity: 0; } to { opacity: 1; } }
+
+.side-rail { display: none; }
+
 @media (min-width: 1024px) {
   html { scrollbar-gutter: stable; }
   body {
-    padding-left: 60px !important;
+    padding-left: 72px !important;
     box-sizing: border-box !important;
   }
-  /* Use full available width minus the collapsed rail */
+  .main {
+    animation: mainFadeOnly 0.25s ease both !important;
+    transform: none !important;
+  }
   .app {
-    padding-left: 1.5rem !important;
-    padding-right: 1.5rem !important;
+    padding-left: 1.75rem !important;
+    padding-right: 1.75rem !important;
     max-width: none !important;
     width: auto !important;
     margin: 0 !important;
     box-sizing: border-box !important;
   }
-}
-@media (min-width: 1920px) {
-  .app {
-    max-width: 1800px !important;
-    margin: 0 auto !important;
-  }
-}
-@media (min-width: 1024px) {
 
-  /* Collapsed rail: 60px wide, icons only. On hover, expands to 220px overlay. */
-  .admin-nav {
-    position: fixed !important;
-    top: 0 !important;
-    left: 0 !important;
-    bottom: 0 !important;
-    width: 60px !important;
-    min-width: 60px !important;
-    box-sizing: border-box !important;
-    flex-direction: column !important;
-    flex-wrap: nowrap !important;
-    gap: 0.25rem !important;
-    padding: 1rem 0.3rem 1rem 0.3rem !important;
-    background: var(--ray-rail-bg) !important;
-    border-right: 1px solid var(--ray-rail-border) !important;
-    box-shadow: 1px 0 3px rgba(15,23,42,0.03) !important;
-    z-index: 100 !important;
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-    transition: width 0.18s ease-out !important;
+  /* Legacy navs are tablet/mobile only now */
+  .admin-nav,
+  .admin-footer-nav,
+  .bottom-tab-bar { display: none !important; }
+
+  /* ---------- Rail shell ---------- */
+  .side-rail {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 72px;
+    background: #ffffff;
+    border-right: 1px solid var(--ray-rail-border);
+    z-index: 1000;
+    overflow: hidden;
+    transition: width 0.2s cubic-bezier(0.2, 0.7, 0.3, 1), box-shadow 0.2s;
+    box-sizing: border-box;
   }
-  .admin-nav:hover {
-    width: 220px !important;
-    box-shadow: 4px 0 20px rgba(15,23,42,0.12) !important;
+  .side-rail:hover {
+    width: 256px;
+    box-shadow: 16px 0 40px -16px rgba(15, 23, 42, 0.28);
   }
 
-  /* Pill: icon only by default, icon + label on rail hover */
-  .admin-nav .nav-pill {
-    width: 100% !important;
-    max-width: 100% !important;
-    min-width: 0 !important;
-    height: 48px !important;
-    padding: 0 0.6rem !important;
-    border-radius: 10px !important;
-    border: 1px solid transparent !important;
-    background: transparent !important;
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: center !important;
-    justify-content: flex-start !important;
-    gap: 0.75rem !important;
-    color: var(--ray-text-muted) !important;
-    font-size: 0.85rem !important;
-    font-weight: 600 !important;
-    transition: background 0.15s, color 0.15s !important;
-    position: relative !important;
-    overflow: hidden !important;
-    box-sizing: border-box !important;
-    flex-shrink: 0 !important;
-    flex-grow: 0 !important;
-    white-space: nowrap !important;
+  /* ---------- Brand ---------- */
+  .rail-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 18px 14px 12px;
+    min-height: 78px;
+    flex-shrink: 0;
+    box-sizing: border-box;
   }
-  .admin-nav .nav-pill:hover {
-    background: var(--ray-rail-active) !important;
-    color: var(--ray-blue) !important;
+  .rail-logo {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #1e40af, #3b82f6);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 6px 14px -6px rgba(30, 64, 175, 0.55);
   }
-  .admin-nav .nav-pill.active {
-    background: var(--ray-rail-active) !important;
-    color: var(--ray-blue) !important;
-    border-color: #dbeafe !important;
-    box-shadow: none !important;
+  .rail-brand-text {
+    display: flex;
+    flex-direction: column;
+    white-space: nowrap;
+    line-height: 1.25;
+    opacity: 0;
+    transition: opacity 0.12s;
   }
-  .admin-nav .nav-pill.active::before {
+  .rail-brand-text strong {
+    font-size: 0.95rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    color: var(--ray-text);
+  }
+  .rail-brand-text small {
+    font-size: 0.72rem;
+    color: var(--ray-text-muted);
+  }
+
+  /* ---------- Scroll area ---------- */
+  .rail-scroll {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 2px 12px 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    scrollbar-width: none;
+  }
+  .rail-scroll::-webkit-scrollbar { display: none; }
+
+  .rail-section {
+    position: relative;
+    height: 30px;
+    margin-top: 6px;
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .rail-section::before {
     content: "";
     position: absolute;
-    left: -8px;
+    left: 10px;
+    right: 10px;
+    top: 50%;
+    height: 1px;
+    background: var(--ray-rail-border);
+    transition: opacity 0.12s;
+  }
+  .rail-section .rail-label {
+    font-size: 0.66rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.14em !important;
+    color: #94a3b8 !important;
+  }
+
+  /* ---------- Items ---------- */
+  .rail-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    height: 46px;
+    padding: 0 12px;
+    margin: 0;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: #64748b;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    transition: background 0.15s, color 0.15s;
+  }
+  .rail-item:hover {
+    background: #f1f5f9;
+    color: var(--ray-text);
+  }
+  .rail-item.active {
+    background: var(--ray-blue-soft);
+    color: var(--ray-blue);
+  }
+  .rail-item.active::before {
+    content: "";
+    position: absolute;
+    left: -12px;
     top: 10px;
     bottom: 10px;
     width: 3px;
+    border-radius: 0 3px 3px 0;
     background: var(--ray-blue);
-    border-radius: 0 2px 2px 0;
   }
-  .admin-nav .nav-icon {
-    font-size: 1.35rem !important;
-    line-height: 1 !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    width: 32px !important;
-    flex-shrink: 0 !important;
+  .rail-ico {
+    position: relative;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
-  /* Label hidden until rail expands */
-  .admin-nav .nav-label-short {
-    display: inline-block !important;
-    font-size: 0.85rem !important;
-    font-weight: 600 !important;
-    text-transform: none !important;
-    letter-spacing: 0 !important;
-    white-space: nowrap !important;
-    opacity: 0 !important;
-    transition: opacity 0.1s ease-out !important;
-  }
-  .admin-nav:hover .nav-label-short {
-    opacity: 1 !important;
-    transition: opacity 0.2s ease-out 0.05s !important;
-  }
-  .admin-nav .nav-label-long {
-    display: none !important;
-  }
-  .admin-nav .nav-pill.active::before {
-    left: 0 !important;
+  .rail-label {
+    white-space: nowrap;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: 0;
+    transition: opacity 0.1s;
   }
 
-  /* Admin footer nav no longer rendered — safe-hide if leftover */
-  .admin-footer-nav { display: none !important; }
-  .admin-footer-nav .nav-link-sm:hover,
-  .admin-footer-nav .nav-link-sm.active {
-    background: var(--ray-rail-active);
-    color: var(--ray-blue);
+  /* Badges — dot on icon when collapsed, pill on right when expanded */
+  .rail-dot,
+  .rail-count {
+    border-radius: 999px;
+    background: #ef4444;
+    color: #ffffff;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
   }
-  .admin-footer-nav .nav-sep {
-    display: none !important;
+  .rail-dot {
+    position: absolute;
+    top: -8px;
+    right: -12px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    font-size: 0.6rem;
+    border: 2px solid #ffffff;
+    box-sizing: border-box;
+    transition: opacity 0.1s;
+  }
+  .rail-count {
+    margin-left: auto;
+    min-width: 26px;
+    height: 22px;
+    padding: 0 7px;
+    font-size: 0.7rem;
+    opacity: 0;
+    transition: opacity 0.1s;
+  }
+  .rail-dot.warn,
+  .rail-count.warn { background: #f59e0b; }
+
+  /* ---------- Footer ---------- */
+  .rail-foot {
+    flex-shrink: 0;
+    margin: 8px 12px 14px;
+    height: 44px;
+    padding: 0 0 0 19px;
+    border-radius: 12px;
+    background: #f8fafc;
+    border: 1px solid var(--ray-rail-border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+  .rail-live-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #22c55e;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+  }
+  .rail-foot .rail-label {
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 500;
+    font-size: 0.8rem;
+    color: #64748b;
   }
 
-  /* Hide mobile bottom bar on desktop */
-  .mobile-bottom-bar,
-  .bottom-bar,
-  .mbb {
-    display: none !important;
+  /* ---------- Expanded (hover) state ---------- */
+  .side-rail:hover .rail-label,
+  .side-rail:hover .rail-brand-text,
+  .side-rail:hover .rail-count {
+    opacity: 1;
+    transition: opacity 0.18s ease 0.06s;
+  }
+  .side-rail:hover .rail-dot,
+  .side-rail:hover .rail-section::before {
+    opacity: 0;
+  }
+}
+
+@media (min-width: 1920px) {
+  .app {
+    max-width: 1820px !important;
+    margin: 0 auto !important;
   }
 }
 
