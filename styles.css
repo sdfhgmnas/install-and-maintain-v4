@@ -742,30 +742,45 @@ table {
   font-size: 0.9rem;
 }
 
+/* v3.9.29 — Royal blue column headers across the app */
 thead {
-  background: var(--surface-2);
+  background: linear-gradient(180deg, #1e40af 0%, #1d4ed8 100%);
   position: sticky;
   top: 0;
   z-index: 1;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.1);
 }
 
 th {
   text-align: left;
-  padding: 0.7rem 1rem;
-  font-size: 0.72rem;
+  padding: 0.75rem 1rem;
+  font-size: 0.74rem;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-muted);
-  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #ffffff;
+  font-weight: 700;
   white-space: nowrap;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid #1e3a8a;
+  vertical-align: middle;
 }
 
+/* v3.9.29 — Row cells align with middle of header for cleaner look */
 td {
   padding: 0.8rem 1rem;
   border-top: 1px solid var(--border);
-  vertical-align: top;
+  vertical-align: middle;
   font-weight: 500;
+  line-height: 1.45;
+}
+
+/* Sort indicators inside royal-blue headers stay visible */
+thead .sortable-th,
+thead .sortable-th:hover {
+  color: #ffffff;
+}
+thead .sort-arrow,
+thead .sort-indicator {
+  color: rgba(255, 255, 255, 0.85);
 }
 
 tbody tr {
@@ -2636,14 +2651,20 @@ table {
   font-size: 0.88rem;
 }
 
+/* v3.9.29 — Royal blue headers (override) */
 th {
-  font-size: 0.7rem !important;
-  letter-spacing: 0.04em !important;
+  font-size: 0.72rem !important;
+  letter-spacing: 0.05em !important;
   font-weight: 700 !important;
-  color: var(--text-muted) !important;
-  padding: 0.55rem 0.65rem !important;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border);
+  color: #ffffff !important;
+  padding: 0.75rem 0.8rem !important;
+  background: linear-gradient(180deg, #1e40af 0%, #1d4ed8 100%) !important;
+  border-bottom: 1px solid #1e3a8a !important;
+  vertical-align: middle;
+}
+thead th {
+  background: linear-gradient(180deg, #1e40af 0%, #1d4ed8 100%) !important;
+  color: #ffffff !important;
 }
 
 td {
@@ -11864,4 +11885,363 @@ button.clickable-card:focus-visible {
 #qrReader canvas {
   width: 100% !important;
   height: auto !important;
+}
+
+/* ============================================================
+   v3.9.29 — SMPL / xray-style redesign
+   Mint page · Royal blue accents · White rounded cards ·
+   UPPERCASE section headers · Left icon rail (desktop)
+   ============================================================ */
+
+:root {
+  --ray-blue:       #1e40af;
+  --ray-blue-light: #3b82f6;
+  --ray-blue-soft:  #eff6ff;
+  --ray-mint-bg:    #f3faf5;
+  --ray-mint-bg-2:  #eef7f1;
+  --ray-card:       #ffffff;
+  --ray-card-border:#e5efe8;
+  --ray-card-shadow:0 1px 2px rgba(15,23,42,0.04), 0 2px 10px -2px rgba(15,23,42,0.06);
+  --ray-text:       #0f172a;
+  --ray-text-muted: #64748b;
+  --ray-rail-bg:    #ffffff;
+  --ray-rail-border:#e5efe8;
+  --ray-rail-active:#eff6ff;
+}
+
+/* ---- Body background: mint with soft gradient hint ---- */
+body {
+  background:
+    radial-gradient(1200px 500px at 15% -10%, rgba(59,130,246,0.04), transparent 60%),
+    linear-gradient(180deg, var(--ray-mint-bg) 0%, var(--ray-mint-bg-2) 100%) !important;
+  background-attachment: fixed !important;
+}
+
+/* ---- Cards: pure white, soft shadow, 14px rounded ---- */
+.card {
+  background: var(--ray-card) !important;
+  border: 1px solid var(--ray-card-border) !important;
+  border-radius: 14px !important;
+  box-shadow: var(--ray-card-shadow) !important;
+}
+
+/* ---- Section headings: UPPERCASE title, muted subtitle ---- */
+.section-heading h2 {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 1.02rem;
+  color: var(--ray-text);
+  font-weight: 800;
+  margin-bottom: 0.2rem;
+}
+.section-subtitle,
+.section-heading p {
+  color: var(--ray-text-muted);
+  font-size: 0.85rem;
+  margin-top: 0;
+}
+
+/* ---- Header: polished, blue accent for app version pill ---- */
+.app-version {
+  background: var(--ray-blue-soft);
+  color: var(--ray-blue);
+  border: 1px solid #dbeafe;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-left: 0.5rem;
+  vertical-align: middle;
+}
+
+/* ---- Primary accent swap to royal blue (where safe) ---- */
+.nav-pill.active,
+.btn-primary {
+  background: var(--ray-blue) !important;
+  border-color: var(--ray-blue) !important;
+}
+.btn-primary:hover {
+  background: #1e3a8a !important;
+  border-color: #1e3a8a !important;
+}
+.nav-pill:hover {
+  border-color: var(--ray-blue-light) !important;
+  color: var(--ray-text) !important;
+}
+
+/* ---- Row hover: blue tint ---- */
+tr:hover td {
+  background: rgba(59, 130, 246, 0.04) !important;
+}
+
+/* ---- Table container: softer frame ---- */
+.table-wrap {
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--ray-card-border);
+}
+
+/* ---- Summary grid cards (homepage stats): white + ring ---- */
+.summary-box {
+  background: var(--ray-card) !important;
+  border: 1px solid var(--ray-card-border) !important;
+  border-radius: 12px !important;
+  box-shadow: var(--ray-card-shadow) !important;
+  text-align: center;
+  padding: 1.2rem 0.8rem !important;
+}
+.summary-box::after {
+  display: none !important; /* remove the old left bar */
+}
+.summary-box strong {
+  display: block !important;
+  font-size: 1.9rem;
+  color: var(--ray-text);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.summary-box span {
+  display: block !important;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+  color: var(--ray-text-muted);
+  font-weight: 700;
+  margin-top: 0.2rem;
+}
+
+/* ==== v3.9.30 — Circular progress rings for summary boxes ==== */
+.stat-ring-wrap {
+  width: 110px;
+  height: 110px;
+  margin: 0 auto 0.5rem auto;
+  position: relative;
+}
+.stat-ring-wrap svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+  display: block;
+}
+.stat-ring-bg { stroke: #f1f5f9; }
+.stat-ring-fg {
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.7s ease-out;
+}
+.stat-ring-num {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.9rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--ray-text);
+  font-variant-numeric: tabular-nums;
+}
+/* Color palette per summary variant */
+.summary-box.summary-info   .stat-ring-fg { stroke: #1e40af; }
+.summary-box.summary-ok     .stat-ring-fg { stroke: #22c55e; }
+.summary-box.summary-danger .stat-ring-fg { stroke: #ef4444; }
+.summary-box.summary-warn   .stat-ring-fg { stroke: #f59e0b; }
+.summary-box.summary-purple .stat-ring-fg { stroke: #8b5cf6; }
+
+/* Tighter grid for better fit with rings */
+.summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)) !important;
+  gap: 0.75rem !important;
+}
+
+/* ---- Needs-calibration + other callout cards use royal blue bar ---- */
+.needs-calib-card {
+  border-left: 4px solid var(--ray-blue) !important;
+}
+
+/* ============================================================
+   DESKTOP (≥1024px): Left icon rail navigation (xray style)
+   ============================================================ */
+@media (min-width: 1024px) {
+  /* Shift the whole app right to make space for 72px rail */
+  .app {
+    padding-left: 88px !important;
+    max-width: 1320px;
+  }
+
+  /* Convert admin-nav from horizontal pills to vertical rail */
+  .admin-nav {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 72px;
+    flex-direction: column !important;
+    flex-wrap: nowrap !important;
+    gap: 0.25rem !important;
+    padding: 1rem 0.4rem !important;
+    background: var(--ray-rail-bg);
+    border-right: 1px solid var(--ray-rail-border);
+    box-shadow: 1px 0 3px rgba(15,23,42,0.03);
+    z-index: 50;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  /* Icon-only pills in the rail */
+  .admin-nav .nav-pill {
+    width: 56px;
+    height: 56px;
+    padding: 0 !important;
+    border-radius: 12px !important;
+    border: 1px solid transparent !important;
+    background: transparent !important;
+    display: flex !important;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    color: var(--ray-text-muted) !important;
+    font-size: 0.6rem;
+    font-weight: 600;
+    transition: all 0.15s;
+    position: relative;
+  }
+  .admin-nav .nav-pill:hover {
+    background: var(--ray-rail-active) !important;
+    color: var(--ray-blue) !important;
+  }
+  .admin-nav .nav-pill.active {
+    background: var(--ray-rail-active) !important;
+    color: var(--ray-blue) !important;
+    border-color: #dbeafe !important;
+    box-shadow: none !important;
+  }
+  .admin-nav .nav-pill.active::before {
+    content: "";
+    position: absolute;
+    left: -8px;
+    top: 10px;
+    bottom: 10px;
+    width: 3px;
+    background: var(--ray-blue);
+    border-radius: 0 2px 2px 0;
+  }
+  .admin-nav .nav-icon {
+    font-size: 1.3rem;
+    line-height: 1;
+  }
+  .admin-nav .nav-label-short {
+    display: block !important;
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  .admin-nav .nav-label-long {
+    display: none !important;
+  }
+
+  /* Secondary admin footer links → move into rail too */
+  .admin-footer-nav {
+    position: fixed !important;
+    left: 0;
+    bottom: 1rem;
+    width: 72px;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 0.3rem !important;
+    padding: 0.4rem !important;
+    align-items: stretch !important;
+    z-index: 51;
+  }
+  .admin-footer-nav .nav-link-sm {
+    width: 56px;
+    height: 48px;
+    padding: 0 !important;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    font-size: 0.6rem;
+    color: var(--ray-text-muted);
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .admin-footer-nav .nav-link-sm:hover,
+  .admin-footer-nav .nav-link-sm.active {
+    background: var(--ray-rail-active);
+    color: var(--ray-blue);
+  }
+  .admin-footer-nav .nav-sep {
+    display: none !important;
+  }
+
+  /* Hide mobile bottom bar on desktop */
+  .mobile-bottom-bar,
+  .bottom-bar,
+  .mbb {
+    display: none !important;
+  }
+}
+
+/* ============================================================
+   Modal & card tweaks for cleaner xray look
+   ============================================================ */
+.modal {
+  border-radius: 16px !important;
+}
+
+/* UPPERCASE subtle headings for consistency */
+h2 {
+  letter-spacing: -0.01em;
+}
+
+/* Form fields: softer rounded, consistent blue focus */
+input[type="text"]:focus,
+input[type="search"]:focus,
+input[type="password"]:focus,
+input[type="number"]:focus,
+input[type="email"]:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--ray-blue) !important;
+  box-shadow: 0 0 0 4px rgba(59,130,246,0.14) !important;
+}
+
+/* ---- Alignment polish ---- */
+.section-heading {
+  align-items: center;
+}
+.section-heading > div:first-child {
+  min-width: 0;
+}
+.summary-grid {
+  gap: 0.75rem;
+}
+.tk-stats {
+  align-items: center;
+}
+.tk-stat {
+  align-items: center;
+}
+
+/* ---- Row-actions buttons line up neatly ---- */
+.row-actions {
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* ---- Features / preview grids spacing ---- */
+.calib-thumb-grid,
+.needs-calib-list {
+  align-items: start;
+}
+
+/* ---- Live-badge + user-badge alignment in header ---- */
+.header-actions {
+  align-items: center;
+  gap: 0.5rem;
 }
