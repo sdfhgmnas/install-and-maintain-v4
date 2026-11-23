@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 
 // App version — bump on every meaningful edit so deployed copies are
 // visibly identifiable.
-const APP_VERSION = "3.9.34";
+const APP_VERSION = "3.9.35";
 
 const USERS = {
   akash:     { password: "akash",     role: "akash" },
@@ -7632,37 +7632,38 @@ const ADMIN_NAV = [
   { key: "stock",         view: "stock",         icon: "▦", label: "Stock",     labelLong: "Stock" },
   { key: "accounts",      view: "accounts",      icon: "₹", label: "Accounts",  labelLong: "Accounts" },
   { key: "renewals",      view: "renewals",      icon: "📅", label: "Renewals", labelLong: "Renewal Tracker" },
+  // v3.9.35 — Admin-only extras merged into main nav (used to be separate footer row)
+  { key: "timeline",      view: "timeline",      icon: "🗓", label: "Timeline",  labelLong: "Vehicle Timeline", adminOnly: true },
+  { key: "deletions",     view: "deletions",     icon: "🗑", label: "Deletions", labelLong: "Deletion Audit Log", adminOnly: true },
+  { key: "user-access",   view: "user-access",   icon: "👥", label: "Users",     labelLong: "User Access", adminOnly: true },
 ];
 
 // Returns nav items the current user can access
 function navForCurrentUser() {
   const perms = getUserPerms(currentUser);
   if (!perms) return [];
-  if (perms.isAdmin) return ADMIN_NAV;
-  return ADMIN_NAV.filter((n) => (perms.allowedPages || []).includes(n.key));
+  if (perms.isAdmin) return ADMIN_NAV; // admin gets all items including adminOnly ones
+  // Non-admin: filter by allowed pages AND exclude adminOnly items
+  return ADMIN_NAV.filter((n) => !n.adminOnly && (perms.allowedPages || []).includes(n.key));
 }
 
 function renderAdminNav(activeKey) {
   const navItems = navForCurrentUser();
-  const perms = getUserPerms(currentUser);
+  // v3.9.35 — Single rail with icon + label; admin extras (Timeline, Deletions,
+  // User Access) are part of the same list now, no separate footer row.
+  // Deletion count is appended to its label.
   return `
-    <div class="admin-nav">${navItems.map(
-      (n) =>
-        `<button type="button" class="nav-pill ${n.key === activeKey ? "active" : ""}" data-nav="${n.view}">
-          <span class="nav-icon">${n.icon}</span>
-          <span class="nav-label-short">${escapeHtml(n.label)}</span>
-          <span class="nav-label-long">${escapeHtml(n.labelLong)}</span>
-        </button>`
-    ).join("")}</div>
-    ${perms?.isAdmin ? `
-      <div class="admin-footer-nav">
-        <button type="button" class="nav-link-sm ${activeKey === "timeline" ? "active" : ""}" data-nav="timeline">📅 Vehicle Timeline</button>
-        <span class="nav-sep">·</span>
-        <button type="button" class="nav-link-sm ${activeKey === "deletions" ? "active" : ""}" data-nav="deletions">🗑️ Deletion Audit Log${deletionLog.length ? ` (${deletionLog.length})` : ""}</button>
-        <span class="nav-sep">·</span>
-        <button type="button" class="nav-link-sm ${activeKey === "user-access" ? "active" : ""}" data-nav="user-access">👥 User Access</button>
-      </div>
-    ` : ""}
+    <div class="admin-nav">${navItems.map((n) => {
+      let labelText = n.label;
+      if (n.key === "deletions" && deletionLog.length) {
+        labelText = `${n.label} (${deletionLog.length})`;
+      }
+      return `<button type="button" class="nav-pill ${n.key === activeKey ? "active" : ""}" data-nav="${n.view}" title="${escapeHtml(n.labelLong)}">
+        <span class="nav-icon">${n.icon}</span>
+        <span class="nav-label-short">${escapeHtml(labelText)}</span>
+        <span class="nav-label-long">${escapeHtml(n.labelLong)}</span>
+      </button>`;
+    }).join("")}</div>
     ${renderMobileBottomBar(activeKey)}
   `;
 }
